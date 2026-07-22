@@ -5254,13 +5254,14 @@ async function empLogin(){
       // 查找关联的 employee 记录
       const{data:empRec}=await sbClient.from('employees').select('*').eq('profile_id',profileId).maybeSingle();
       if(empRec){
-        employeeId=empRec.id;
-        emp=empById(empRec.id);
-        // 回退：如果云端UUID匹配不到本地员工，按名字查找（同步未完成时）
+        // 优先用 local_id 查找本地员工（syncFromSupabase 用 local_id 作为本地 id）
+        emp=empRec.local_id!=null?empById(empRec.local_id):null;
+        if(!emp) emp=DB.getEmployees().find(e=>e.name===profile.name);
         if(!emp){
-          emp=DB.getEmployees().find(e=>e.name===profile.name);
-          if(emp) employeeId=emp.id;
+          // 最后兜底：用 cloud UUID 查找（极端情况）
+          emp=empById(empRec.id);
         }
+        employeeId=emp?emp.id:(empRec.local_id||empRec.id);
         if(!pwdMatch&&emp){
           // 回退验证：用 employees 表的密码
           if(emp.password&&pwd===emp.password)pwdMatch=true;
@@ -5276,6 +5277,16 @@ async function empLogin(){
         }
       }
       if(!pwdMatch){toast('密码错误');return;}
+      // 如果密码匹配但没找到本地员工记录，从 profile 创建一条本地员工记录
+      if(!emp){
+        const emps=DB.getEmployees();
+        const newId=emps.length?Math.max(...emps.map(e=>e.id))+1:1;
+        emp={id:newId,name:profile.name,phone:profile.phone||'',password:profile.password||'',workType:'full_time',guaranteeLevel:0,hireMonth:'',assessmentPercent:0,accommodationStatus:'none'};
+        emps.push(emp);
+        DB.setEmployees(emps);
+        employeeId=newId;
+        console.log('[Auth] 从profile自动创建本地员工记录:',emp.name,'id=',newId);
+      }
     }catch(e){
       console.warn('[Auth] profiles验证失败:',e);
       toast('登录验证失败，请重试');
