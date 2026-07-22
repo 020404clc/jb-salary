@@ -5994,10 +5994,21 @@ function showInstallGuide(){
 // ========================================
 // 初始化 Supabase 并同步数据
 (async function initApp(){
-  // 0. 检查是否需要重置（URL参数 ?fresh=1）
+  // 0. 检查是否需要重置（URL参数 ?fresh=1）：清localStorage + 清SW缓存 + 重载
   if(new URLSearchParams(window.location.search).get('fresh')==='1'){
     Object.keys(localStorage).filter(k=>k.startsWith('jb2_')).forEach(k=>localStorage.removeItem(k));
-    console.log('[重置] 已清空所有本地数据');
+    if('caches' in window){
+      const keys=await caches.keys();
+      await Promise.all(keys.map(k=>caches.delete(k)));
+    }
+    if('serviceWorker' in navigator){
+      const regs=await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r=>r.unregister()));
+    }
+    // 清完后去掉URL参数重新加载，避免下次打开还触发重置
+    history.replaceState({},document.title,window.location.pathname);
+    location.reload();
+    return;
   }
   
   // 1. 初始化本地演示数据（如果无数据）
