@@ -1080,7 +1080,7 @@ const DB={
   },
   getEmployees(){return this._g('employees').map(e=>{if(e.workType)e.workType=normalizeWorkType(e.workType);return e;});},
   saveEmployees(v){this._s('employees',v.map(e=>{if(e.workType)e.workType=normalizeWorkType(e.workType);return e;}));},
-  getScripts(){return this._g('scripts');},
+  getScripts(){const raw=this._g('scripts');const seen=new Set();return raw.filter(s=>{if(seen.has(s.name))return false;seen.add(s.name);return true;});},
   saveScripts(v){this._s('scripts',v);},
   getSessions(){return this._g('sessions');},
   saveSessions(v){this._s('sessions',v);},
@@ -1088,7 +1088,7 @@ const DB={
   saveAttendance(v){this._s('attendance',v);},
   getTDExchanges(){return this._g('td_exchanges');},
   saveTDExchanges(v){this._s('td_exchanges',v);},
-  getSchedules(){return this._g('schedules');},
+  getSchedules(){const raw=this._g('schedules');const seen=new Set();return raw.filter(s=>{const k=s.date+'_'+s.scriptId+'_'+JSON.stringify(s.dms||[]);if(seen.has(k))return false;seen.add(k);return true;});},
   saveSchedules(v){this._s('schedules',v);},
   getRatioOverrides(){return this._g('ratio_overrides');},
   saveRatioOverrides(v){this._s('ratio_overrides',v);},
@@ -1604,6 +1604,15 @@ async function syncFromSupabase(showToast){
             localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
             successCount++;
             continue;
+          }
+          // 去重：scripts按name去重，schedules按date+scriptId去重
+          if(localKey === 'scripts'){
+            const seen = new Set();
+            localData = localData.filter(s => { if(seen.has(s.name)) return false; seen.add(s.name); return true; });
+          }
+          if(localKey === 'schedules'){
+            const seen = new Set();
+            localData = localData.filter(s => { const k = s.date+'_'+s.scriptId; if(seen.has(k)) return false; seen.add(k); return true; });
           }
           // 始终用云端数据覆盖本地（确保删除操作能同步）
           localStorage.setItem('jb2_' + localKey, JSON.stringify(localData));
