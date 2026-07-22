@@ -1524,7 +1524,10 @@ async function syncFromSupabase(showToast){
                 mergedData.push(local);
               }
             });
-            localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
+            // 只有云端有数据时才覆盖本地
+            if(mergedData.length > 0){
+              localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
+            }
             successCount++;
             continue;
           }
