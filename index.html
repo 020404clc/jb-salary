@@ -2552,7 +2552,7 @@ function switchRole(role){
   }else{
     document.querySelector('.role-btn:last-child').classList.add('active');
     document.getElementById('employeePage').classList.add('active');
-    if(currentUser&&currentUser.role==='employee'&&currentEmp){
+    if(currentEmp){
       // 已登录员工，直接显示内容
       document.getElementById('empLogin').style.display='none';
       document.getElementById('empContent').style.display='block';
@@ -2570,13 +2570,13 @@ function switchRole(role){
 // PERMISSION CHECK
 // ========================================
 function requireAdmin(){
-  if(!currentUser||currentUser.role!=='admin'){
+  if(!adminLoggedIn){
     toast('需要管理员权限');
     return false;
   }
   return true;
 }
-function isAdmin(){return currentUser&&currentUser.role==='admin';}
+function isAdmin(){return adminLoggedIn;}
 function canOperate(){return isAdmin()||!!currentEmp;}
 
 // ========================================
@@ -5277,14 +5277,17 @@ async function empLogin(){
   }
 
   currentEmp=emp;
-  currentUser={
-    id:profileId||('emp_'+employeeId),
-    name:emp?emp.name:'员工',
-    role:'employee',
-    profileId:profileId,
-    employeeId:employeeId
-  };
-  localStorage.setItem('jb2_currentUser',JSON.stringify(currentUser));
+  // 如果管理员已登录，不覆盖 currentUser
+  if(!adminLoggedIn){
+    currentUser={
+      id:profileId||('emp_'+employeeId),
+      name:emp?emp.name:'员工',
+      role:'employee',
+      profileId:profileId,
+      employeeId:employeeId
+    };
+    localStorage.setItem('jb2_currentUser',JSON.stringify(currentUser));
+  }
   empViewDate=todayStr();
   empViewMonth=monthStr();
   empCurrentTab=0;
@@ -5300,8 +5303,11 @@ async function empLogin(){
 
 function empLogout(){
   currentEmp=null;
-  currentUser=null;
-  localStorage.removeItem('jb2_currentUser');
+  // 如果管理员已登录，不清除状态
+  if(!adminLoggedIn){
+    currentUser=null;
+    localStorage.removeItem('jb2_currentUser');
+  }
   document.getElementById('empLogin').style.display='block';
   document.getElementById('empContent').style.display='none';
   document.getElementById('empPwd').value='';
@@ -5925,8 +5931,17 @@ function showInstallGuide(){
   }
   
   // 6. 恢复登录状态
+  const adminLoggedInSaved=localStorage.getItem('jb2_adminLoggedIn')==='true';
   const savedUser=localStorage.getItem('jb2_currentUser');
-  if(savedUser){
+  if(adminLoggedInSaved){
+    // 恢复管理员状态
+    adminLoggedIn=true;
+    document.querySelector('.role-btn:first-child').classList.add('active');
+    document.querySelector('.role-btn:last-child').classList.remove('active');
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+    document.getElementById('adminPage').classList.add('active');
+    renderAdmin();
+  }else if(savedUser){
     try{
       const u=JSON.parse(savedUser);
       if(u.role==='admin'){
@@ -5970,6 +5985,7 @@ function showInstallGuide(){
 
 function adminLogout(){
   adminLoggedIn=false;
+  localStorage.removeItem('jb2_adminLoggedIn');
   currentUser=null;
   localStorage.removeItem('jb2_currentUser');
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -6049,6 +6065,7 @@ async function submitAdminLogin(){
   }
   if(pwd===adminPwd){
     adminLoggedIn=true;
+    localStorage.setItem('jb2_adminLoggedIn','true');
     currentUser={id:'admin',name:'管理员',role:'admin'};
     localStorage.setItem('jb2_currentUser',JSON.stringify(currentUser));
     hideAdminLoginModal();
