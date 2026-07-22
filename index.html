@@ -4018,7 +4018,7 @@ function renderScheduleList(){
         <div class="session-info">
           <span>&#128100; ${dmNames||'未分配DM'}</span>
           ${pcHtml}
-          ${sch.notes?'<span>&#128221; '+(sch.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim())+'</span>':''}
+          ${sch.notes?'<span>&#128221; '+(function(n){return (n||'').replace(/\[status:[^\]]*\]/g,'').replace(/\[sessionId:[^\]]*\]/g,'').trim()})(sch.notes)+'</span>':''}
           ${linkedSession?'<span>&#9989; 已关联场次</span>':''}
         </div>
         <div class="sch-card-actions">
@@ -5787,7 +5787,7 @@ function renderEmpScheduleView(){
         <div class="sch-card-detail" id="sch-detail-e${sch.id}">
           <div class="session-info">
             ${sch.playerCount?'<span>&#127922; '+sch.playerCount+'人预组</span>':''}
-            ${sch.notes?'<span>&#128221; '+(sch.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim())+'</span>':''}
+            ${sch.notes?'<span>&#128221; '+(function(n){return (n||'').replace(/\[status:[^\]]*\]/g,'').replace(/\[sessionId:[^\]]*\]/g,'').trim()})(sch.notes)+'</span>':''}
             ${dmNote?'<span>&#9997;&#65039; 我的备注: '+dmNote+'</span>':''}
           </div>
         </div>
