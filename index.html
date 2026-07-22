@@ -1423,7 +1423,10 @@ async function syncFromSupabase(showToast){
           localStorage.setItem('jb2_employees', JSON.stringify(localEmps));
           successCount++;
         } else {
-          console.log('[Supabase] 云端 employees 为空，保留本地数据');
+          // 云端为空时，也清空本地（确保删除操作能同步）
+          localStorage.setItem('jb2_employees', JSON.stringify([]));
+          console.log('[Supabase] 云端 employees 为空，已清空本地数据');
+          successCount++;
         }
       } else {
         if(pErr && pErr.code !== '42P01') failCount++;
@@ -1473,10 +1476,8 @@ async function syncFromSupabase(showToast){
           delete local.deducted_card_phone; delete local.created_by;
           return local;
         });
-        // 只有云端有数据时才覆盖本地
-        if(localSessions.length > 0){
-          localStorage.setItem('jb2_sessions', JSON.stringify(localSessions));
-        }
+        // 始终用云端数据覆盖本地（确保删除操作能同步）
+        localStorage.setItem('jb2_sessions', JSON.stringify(localSessions));
         successCount++;
       } else {
         if(sErr && sErr.code !== '42P01') failCount++;
@@ -1513,10 +1514,8 @@ async function syncFromSupabase(showToast){
           delete local.player_count; delete local.session_type;
           return local;
         });
-        // 只有云端有数据时才覆盖本地
-        if(localSchedules.length > 0){
-          localStorage.setItem('jb2_schedules', JSON.stringify(localSchedules));
-        }
+        // 始终用云端数据覆盖本地（确保删除操作能同步）
+        localStorage.setItem('jb2_schedules', JSON.stringify(localSchedules));
         successCount++;
       } else {
         if(sErr2 && sErr2.code !== '42P01') failCount++;
@@ -1601,17 +1600,13 @@ async function syncFromSupabase(showToast){
                 mergedData.push(local);
               }
             });
-            // 只有云端有数据时才覆盖本地
-            if(mergedData.length > 0){
-              localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
-            }
+            // 始终用云端数据覆盖本地（确保删除操作能同步）
+            localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
             successCount++;
             continue;
           }
-          // 只有云端有数据时才覆盖本地（防止空云端清空本地数据）
-          if(localData.length > 0){
-            localStorage.setItem('jb2_' + localKey, JSON.stringify(localData));
-          }
+          // 始终用云端数据覆盖本地（确保删除操作能同步）
+          localStorage.setItem('jb2_' + localKey, JSON.stringify(localData));
           successCount++;
         }
       } catch(e){
@@ -1723,12 +1718,6 @@ async function _sbSyncToSupabase(localKey, data){
     });
 
     const localIds = new Set((data || []).map(d => d.id));
-    // 保护：如果本地数据为空，不要删除云端记录（防止空localStorage覆盖）
-    if(!data || data.length === 0){
-      console.log('[Supabase]', tableName, '本地为空，跳过同步（保护云端数据）');
-      updateCloudBadge(true);
-      return;
-    }
     // 删除云端有但本地已删除的记录
     const toDeleteIds = existingRows ? existingRows.filter(r => r.local_id !== null && !localIds.has(r.local_id)).map(r => r.id) : [];
     if(toDeleteIds.length > 0){
@@ -1772,11 +1761,6 @@ async function _sbSyncToSupabase(localKey, data){
 
 // ---------- employees 专用同步 ----------
 async function _sbSyncEmployees(data){
-  // 保护：如果本地数据为空，不要删除云端数据（防止空localStorage覆盖）
-  if(!data || data.length === 0){
-    console.log('[Supabase] employees 本地为空，跳过同步（保护云端数据）');
-    return;
-  }
   // 查出已有 profiles 和 employees
   const { data: existingProfiles } = await sbClient.from('profiles').select('*').eq('role','employee');
   const { data: existingEmpRows } = await sbClient.from('employees').select('*');
@@ -1836,11 +1820,6 @@ async function _sbSyncEmployees(data){
 
 // ---------- sessions 专用同步 ----------
 async function _sbSyncSessions(data){
-  // 保护：如果本地数据为空，不要删除云端数据
-  if(!data || data.length === 0){
-    console.log('[Supabase] sessions 本地为空，跳过同步（保护云端数据）');
-    return;
-  }
   const { data: existingSess } = await sbClient.from('sessions').select('*');
   // local_id → session row
   const sessByLocalId = {};
@@ -1910,11 +1889,6 @@ async function _sbSyncSessions(data){
 
 // ---------- schedules 专用同步 ----------
 async function _sbSyncSchedules(data){
-  // 保护：如果本地数据为空，不要删除云端数据
-  if(!data || data.length === 0){
-    console.log('[Supabase] schedules 本地为空，跳过同步（保护云端数据）');
-    return;
-  }
   const { data: existingSch } = await sbClient.from('schedules').select('*');
   const schByLocalId = {};
   if(existingSch) existingSch.forEach(s => { if(s.local_id !== null) schByLocalId[s.local_id] = s; });
@@ -1969,11 +1943,6 @@ async function _sbSyncSchedules(data){
 
 // ---------- data_overrides 专用同步 ----------
 async function _sbSyncDataOverrides(data){
-  // 保护：如果本地数据为空，不要删除云端数据
-  if(!data || data.length === 0){
-    console.log('[Supabase] data_overrides 本地为空，跳过同步（保护云端数据）');
-    return;
-  }
   // data_overrides 云端结构: {id, target, month, data(jsonb), local_id}
   // 将本地每条记录整体存为 data jsonb
   const { data: existingRows } = await sbClient.from('data_overrides').select('*');
@@ -2010,11 +1979,6 @@ async function _sbSyncDataOverrides(data){
 
 // ---------- ratio_overrides 专用同步 ----------
 async function _sbSyncRatioOverrides(data){
-  // 保护：如果本地数据为空，不要删除云端数据
-  if(!data || data.length === 0){
-    console.log('[Supabase] ratio_overrides 本地为空，跳过同步（保护云端数据）');
-    return;
-  }
   // ratio_overrides 云端结构: {id, script_id, month, ratio, data(jsonb), local_id}
   // 将本地每条记录整体存为 data jsonb
   const empIdMap = await _sbGetEmployeeIdMap();
@@ -4688,23 +4652,33 @@ function changeAdminPwd(){
   closeModal('adminPwdModal');
   toast('密码已修改（已同步到云端）');
 }
-function clearAllData(){
+async function clearAllData(){
   if(!requireAdmin())return;
   if(!confirm('确定要重置所有数据吗？这将同时清空云端数据！')) return;
   const keys=['employees','sessions','scripts','attendance','td_exchanges','td_consumption','schedules','ratio_overrides','data_overrides','td_adjustments','recharges'];
   keys.forEach(k=>localStorage.removeItem('jb2_'+k));
-  // 同步清空 Supabase
+  // 同步清空 Supabase（await 确保删除完成）
   if(sbClient){
+    sbSelfTriggering = true;
     const allTables = [...Object.values(SB_TABLE_MAP), 'profiles', 'session_dm', 'schedule_dm'];
-    for(const tableName of allTables){
+    await Promise.all(allTables.map(tableName =>
       sbClient.from(tableName).delete().neq('id', '00000000-0000-0000-0000-000000000000').then(()=>{
         console.log('[Supabase] 已清空', tableName);
-      }).catch(()=>{});
-    }
+      }).catch(()=>{})
+    ));
+    sbSelfTriggering = false;
   }
   initDemoData();
-  // 重新上传 demo 数据到云端
-  if(sbClient) migrateLocalToSupabase();
+  // 重新上传 demo 数据到云端（直接调用同步函数，跳过 confirm）
+  if(sbClient){
+    for(const localKey of Object.keys(SB_TABLE_MAP)){
+      const data = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
+      if(data.length > 0){
+        try { await _sbSyncToSupabase(localKey, data); } catch(e){ console.warn('上传', localKey, '异常:', e); }
+      }
+    }
+    try { await _sbSyncAdminPwd(localStorage.getItem('jb2_admin_pwd') || '123456'); } catch(e){}
+  }
   renderAdmin();
   toast('数据已重置');
 }
@@ -6038,8 +6012,8 @@ function showInstallGuide(){
     });
   }
   
-  // 6. 渲染默认界面（每次打开都需要重新登录管理端）
-  renderAdmin();
+  // 6. 渲染默认界面（默认显示员工端登录）
+  switchRole('employee');
   setTimeout(showInstallGuide, 3000);
 })();
 
