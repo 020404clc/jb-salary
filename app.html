@@ -1354,63 +1354,76 @@ async function syncFromSupabase(showToast){
     try {
       const { data: profiles, error: pErr } = await sbClient.from('profiles').select('*').eq('role','employee');
       const { data: empRows, error: eErr } = await sbClient.from('employees').select('*');
-      if(!pErr && !eErr && profiles && empRows){
+      if(!pErr && profiles){
         // 只有云端有数据时才覆盖本地（防止空云端覆盖本地演示数据）
-        if(empRows.length > 0 && !sbDirtyTables.has('employees')){
+        if(!sbDirtyTables.has('employees') && (empRows && empRows.length > 0 || profiles && profiles.length > 0)){
           const profileMap = {};
-          profiles.forEach(p => { profileMap[p.id] = p; });
-          const existingLocalEmps = DB.getEmployees();
+          if(profiles) profiles.forEach(p => { profileMap[p.id] = p; });
+          const existingLocalEmps = DB.getEmployees() || [];
           const seenNames = new Set();
-          const localEmps = empRows.map(er => {
-            const local = _sbCloudToLocal('employees', er);
-            const profile = profileMap[er.profile_id];
-            if(profile){
-              local.name = profile.name;
-              local.phone = profile.phone || '';
-              local.password = profile.password || '';
-            }
-            // 用 local_id 匹配本地 ID
-            if(er.local_id !== null && er.local_id !== undefined){
-              local.id = er.local_id;
-            } else if(local.name){
-              // fallback: 用 name 匹配（兼容旧数据）
-              const matched = existingLocalEmps.find(e => e.name === local.name);
-              if(matched) local.id = matched.id;
-              else {
-                const maxId = existingLocalEmps.length ? Math.max(...existingLocalEmps.map(e => e.id)) : 0;
-                local.id = maxId + 1;
+          const localEmps = [];
+          // 从 employees 表同步
+          if(empRows && empRows.length > 0){
+            empRows.forEach(er => {
+              const local = _sbCloudToLocal('employees', er);
+              const profile = profileMap[er.profile_id];
+              if(profile){
+                local.name = profile.name;
+                local.phone = profile.phone || '';
+                local.password = profile.password || '';
               }
-            }
-            if(local.workType) local.workType = normalizeWorkType(local.workType);
-            // 从 local_uuid 还原 accommodationStatus（优先），否则从 accommodation 布尔值还原
-            local.accommodationStatus = er.local_uuid || (er.accommodation ? 'free' : 'none');
-            delete local.accommodation;
-            // 清理 _sbCloudToLocal 残留的 snake_case 字段（本地用 camelCase）
-            delete local.hire_month;
-            delete local.assess_percent;
-            delete local.guarantee_level;
-            delete local.work_type;
-            delete local.profile_id;
-            delete local.created_at;
-            return local;
-          }).filter(e => {
-            if(!e.name) return false;
-            // 按名字去重：保留第一个出现的
-            if(seenNames.has(e.name)) return false;
-            seenNames.add(e.name);
-            return true;
-          });
+              if(er.local_id !== null && er.local_id !== undefined){
+                local.id = er.local_id;
+              } else if(local.name){
+                const matched = existingLocalEmps.find(e => e.name === local.name);
+                if(matched) local.id = matched.id;
+                else {
+                  const maxId = existingLocalEmps.length ? Math.max(...existingLocalEmps.map(e => e.id)) : 0;
+                  local.id = maxId + 1;
+                }
+              }
+              if(local.workType) local.workType = normalizeWorkType(local.workType);
+              local.accommodationStatus = er.accommodation_status || (er.accommodation ? 'free' : 'none');
+              delete local.accommodation;
+              delete local.hire_month; delete local.assess_percent;
+              delete local.guarantee_level; delete local.work_type;
+              delete local.profile_id; delete local.created_at;
+              if(local.name && !seenNames.has(local.name)){
+                seenNames.add(local.name);
+                localEmps.push(local);
+              }
+            });
+          }
+          // 从 profiles 表补充（当 employees 表为空时，从 profiles 创建本地员工）
+          if(profiles && profiles.length > 0){
+            profiles.forEach(p => {
+              if(seenNames.has(p.name)) return;
+              const matched = existingLocalEmps.find(e => e.name === p.name);
+              localEmps.push({
+                id: matched ? matched.id : (existingLocalEmps.length ? Math.max(...existingLocalEmps.map(e => e.id)) + 1 : 1),
+                name: p.name,
+                phone: p.phone || '',
+                password: p.password || '',
+                workType: 'full_time',
+                guaranteeLevel: 0,
+                hireMonth: '',
+                assessmentPercent: 0,
+                accommodationStatus: 'none'
+              });
+              seenNames.add(p.name);
+            });
+          }
           // 合并策略：云端数据优先，保留本地未同步的记录
           const cloudLocalIds = new Set(localEmps.filter(e => e.id !== undefined).map(e => e.id));
           const localOnly = existingLocalEmps.filter(e => e.id !== undefined && !cloudLocalIds.has(e.id));
           const mergedEmps = localEmps.concat(localOnly);
           localStorage.setItem('jb2_employees', JSON.stringify(mergedEmps));
+          console.log('[Supabase] 员工同步完成：', localEmps.length, '条云端 +', localOnly.length, '条本地独有');
           successCount++;
         } else if(sbDirtyTables.has('employees')){
           console.log('[Supabase] 跳过脏表 employees');
           successCount++;
         } else {
-          // 云端为空时保留本地数据（防止数据丢失）
           console.log('[Supabase] 云端 employees 为空，保留本地数据');
           successCount++;
         }
@@ -1426,13 +1439,19 @@ async function syncFromSupabase(showToast){
     // fallback：如果云端映射为空，从 localStorage 已有员工数据构建补充映射
     // localStorage 员工 id 是本地数字ID，但可能残留之前同步时的 cloudId 字段
     if(Object.keys(empIdReverseMap).length === 0){
-      const localEmps = DB.getEmployees() || [];
-      // 尝试用 profile_id 桥接：查云端 employees 的 profile_id → local_id 关系
+      // fallback 1: 从云端 employees 表重新查询
       const { data: fbEmpRows } = await sbClient.from('employees').select('id,profile_id,local_id');
       if(fbEmpRows){
         fbEmpRows.forEach(e => {
           if(e.local_id !== null && e.local_id !== undefined) empIdReverseMap[e.id] = e.local_id;
         });
+      }
+      // fallback 2: 从 profiles 表构建 name → profileId 映射（session_dm 的 employee_id 实际存的是 profile UUID）
+      if(Object.keys(empIdReverseMap).length === 0){
+        const { data: fbProfiles } = await sbClient.from('profiles').select('id,name').eq('role','employee');
+        if(fbProfiles){
+          fbProfiles.forEach(p => { empIdReverseMap[p.id] = p.name; });
+        }
       }
     }
     // 注意：sessions 和 schedules 的脏表检查在后面合并时处理
@@ -1444,8 +1463,15 @@ async function syncFromSupabase(showToast){
         const dmMap = {};
         if(dmRows) dmRows.forEach(dm => {
           if(!dmMap[dm.session_id]) dmMap[dm.session_id] = [];
+          const resolvedEmp = empIdReverseMap[dm.employee_id];
+          let dmEmployeeId = resolvedEmp || dm.employee_id;
+          // 如果 empIdReverseMap 返回的是 name（fallback 2），按名字查找本地员工
+          if(resolvedEmp && typeof resolvedEmp === 'string' && isNaN(resolvedEmp)){
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === resolvedEmp);
+            if(localEmp) dmEmployeeId = localEmp.id;
+          }
           dmMap[dm.session_id].push({
-            employeeId: empIdReverseMap[dm.employee_id] || dm.employee_id,
+            employeeId: dmEmployeeId,
             effectiveHours: dm.share_ratio,
             midnightChoice: dm.dm_choice || 'midnight',
             overtimeFeePerPerson: dm.overtime_fee || 0
@@ -1512,7 +1538,13 @@ async function syncFromSupabase(showToast){
         const schDmMap = {};
         if(schDmRows) schDmRows.forEach(sdm => {
           if(!schDmMap[sdm.schedule_id]) schDmMap[sdm.schedule_id] = [];
-          schDmMap[sdm.schedule_id].push({ dmId: empIdReverseMap[sdm.employee_id] || sdm.employee_id, notes: sdm.notes || '' });
+          const resolvedSchEmp = empIdReverseMap[sdm.employee_id];
+          let schDmId = resolvedSchEmp || sdm.employee_id;
+          if(resolvedSchEmp && typeof resolvedSchEmp === 'string' && isNaN(resolvedSchEmp)){
+            const localEmp2 = (DB.getEmployees()||[]).find(e => e.name === resolvedSchEmp);
+            if(localEmp2) schDmId = localEmp2.id;
+          }
+          schDmMap[sdm.schedule_id].push({ dmId: schDmId, notes: sdm.notes || '' });
         });
         const localSchedules = schRows.map(sr => {
           const local = _sbCloudToLocal('schedules', sr);
@@ -1901,7 +1933,7 @@ async function _sbSyncEmployees(data){
       hire_month: emp.hireMonth || '',
       assess_percent: emp.assessmentPercent || 0,
       accommodation: emp.accommodationStatus === 'free',
-      local_uuid: emp.accommodationStatus || 'none'
+      accommodation_status: emp.accommodationStatus || 'none'
     };
     const existingEmp = empByLocalId[emp.id] || (profileId ? (existingEmpRows || []).find(e => e.profile_id === profileId && (e.local_id === null || e.local_id === undefined)) : null);
     let empError = null;
