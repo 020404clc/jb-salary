@@ -2565,6 +2565,7 @@ function switchRole(role){
     document.getElementById('adminPage').classList.add('active');
     renderAdmin();
   }else{
+    adminLoggedIn=false;
     document.querySelector('.role-btn:last-child').classList.add('active');
     document.getElementById('employeePage').classList.add('active');
     if(currentEmp){
@@ -5865,6 +5866,20 @@ function migrateSchedules(){
 // DEMO DATA
 // ========================================
 function initDemoData(){
+  // 检测并清除旧版demo数据（一次性清理）
+  const demoPhones=['13800001111','13800002222','13800003333','13800004444'];
+  try{
+    const emps=JSON.parse(localStorage.getItem('jb2_employees')||'[]');
+    if(emps.length>0 && emps.some(e=>demoPhones.includes(e.phone))){
+      localStorage.removeItem('jb2_employees');
+      localStorage.removeItem('jb2_scripts');
+      localStorage.removeItem('jb2_sessions');
+      localStorage.removeItem('jb2_schedules');
+      localStorage.removeItem('jb2_attendance');
+      console.log('[Cleanup] 已清除旧版demo数据');
+    }
+  }catch(e){}
+  return; // 不再生成demo数据
   if(DB.getEmployees().length)return;
   // 直接用 localStorage.setItem，不触发 DB._s 的自动推送（避免演示数据污染云端）
   localStorage.setItem('jb2_employees',JSON.stringify([
@@ -5945,64 +5960,15 @@ function showInstallGuide(){
     });
   }
   
-  // 6. 恢复登录状态
-  const adminLoggedInSaved=localStorage.getItem('jb2_adminLoggedIn')==='true';
-  const savedUser=localStorage.getItem('jb2_currentUser');
-  if(adminLoggedInSaved){
-    // 恢复管理员状态
-    adminLoggedIn=true;
-    document.querySelector('.role-btn:first-child').classList.add('active');
-    document.querySelector('.role-btn:last-child').classList.remove('active');
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    document.getElementById('adminPage').classList.add('active');
-    renderAdmin();
-  }else if(savedUser){
-    try{
-      const u=JSON.parse(savedUser);
-      if(u.role==='admin'){
-        adminLoggedIn=true;
-        currentUser=u;
-        document.querySelector('.role-btn:first-child').classList.add('active');
-        document.querySelector('.role-btn:last-child').classList.remove('active');
-        document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-        document.getElementById('adminPage').classList.add('active');
-        renderAdmin();
-      }else if(u.role==='employee'){
-        currentUser=u;
-        if(u.employeeId){
-          currentEmp=empById(u.employeeId);
-        }
-        document.querySelector('.role-btn:last-child').classList.add('active');
-        document.querySelector('.role-btn:first-child').classList.remove('active');
-        document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-        document.getElementById('employeePage').classList.add('active');
-        if(currentEmp){
-          document.getElementById('empLogin').style.display='none';
-          document.getElementById('empContent').style.display='block';
-          renderEmpPage();
-        }else{
-          document.getElementById('empLogin').style.display='block';
-          document.getElementById('empContent').style.display='none';
-          renderEmpSelect();
-        }
-      }
-    }catch(e){
-      console.warn('[Auth] 恢复登录状态失败:',e);
-      renderAdmin();
-    }
-  }else{
-    // 7. 未登录，渲染默认界面
-    renderAdmin();
-  }
+  // 6. 渲染默认界面（每次打开都需要重新登录管理端）
+  renderAdmin();
   setTimeout(showInstallGuide, 3000);
 })();
 
 
 function adminLogout(){
   adminLoggedIn=false;
-  localStorage.removeItem('jb2_adminLoggedIn');
   currentUser=null;
-  localStorage.removeItem('jb2_currentUser');
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   toast('已退出登录');
   // 重新显示登录框
@@ -6080,9 +6046,7 @@ async function submitAdminLogin(){
   }
   if(pwd===adminPwd){
     adminLoggedIn=true;
-    localStorage.setItem('jb2_adminLoggedIn','true');
     currentUser={id:'admin',name:'管理员',role:'admin'};
-    localStorage.setItem('jb2_currentUser',JSON.stringify(currentUser));
     hideAdminLoginModal();
     document.querySelector('.role-btn:first-child').classList.add('active');
     document.querySelector('.role-btn:last-child').classList.remove('active');
