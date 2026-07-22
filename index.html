@@ -5561,7 +5561,10 @@ async function empLogin(){
         if(!pwdMatch&&emp){
           // 回退验证：用 employees 表的密码
           if(emp.password&&pwd===emp.password)pwdMatch=true;
-          if(!emp.password&&pwd===(emp.phone||'').slice(-4))pwdMatch=true;
+          if(!emp.password){
+            const ph=(emp.phone||'').slice(-4);
+            if(ph&&pwd===ph)pwdMatch=true;
+          }
         }
       }else{
         // 没有关联的 employee，尝试用 name 匹配
@@ -5569,7 +5572,10 @@ async function empLogin(){
         if(emp)employeeId=emp.id;
         if(!pwdMatch&&emp){
           if(emp.password&&pwd===emp.password)pwdMatch=true;
-          if(!emp.password&&pwd===(emp.phone||'').slice(-4))pwdMatch=true;
+          if(!emp.password){
+            const ph2=(emp.phone||'').slice(-4);
+            if(ph2&&pwd===ph2)pwdMatch=true;
+          }
         }
       }
       if(!pwdMatch){toast('密码错误');return;}
@@ -5596,7 +5602,11 @@ async function empLogin(){
     if(!emp){toast('员工不存在');return;}
     employeeId=emp.id;
     if(emp.password&&pwd!==emp.password){toast('密码错误');return;}
-    if(!emp.password&&pwd!==((emp.phone||'').slice(-4))){toast('密码错误（默认手机后4位）');return;}
+    if(!emp.password){
+      const phoneSuffix=(emp.phone||'').slice(-4);
+      if(!phoneSuffix){toast('该员工未设置密码和手机号，请先在管理端设置');return;}
+      if(pwd!==phoneSuffix){toast('密码错误（默认手机后4位）');return;}
+    }
   }
 
   currentEmp=emp;
@@ -5609,6 +5619,7 @@ async function empLogin(){
       profileId:profileId,
       employeeId:employeeId
     };
+    currentUser.loginTimestamp = Date.now();
     localStorage.setItem('jb2_currentUser',JSON.stringify(currentUser));
   }
   empViewDate=todayStr();
@@ -6289,20 +6300,28 @@ function showInstallGuide(){
   // 先强制清除所有 active，再切换到员工端
   document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  // 恢复员工登录状态
+  // 恢复员工登录状态（需要带时间戳验证，超过24小时需重新登录）
   const savedUser = localStorage.getItem('jb2_currentUser');
   if(savedUser){
     try{
       const u = JSON.parse(savedUser);
-      if(u && u.role === 'employee' && u.employeeId){
+      const sessionAge = Date.now() - (u.loginTimestamp || 0);
+      const SESSION_TIMEOUT = 24 * 60 * 60 * 1000; // 24小时过期
+      if(u && u.role === 'employee' && u.employeeId && sessionAge < SESSION_TIMEOUT){
         const emp = empById(u.employeeId);
         if(emp){
           currentEmp = emp;
           document.getElementById('empLogin').style.display='none';
           document.getElementById('empContent').style.display='block';
+        } else {
+          // 员工不存在了，清除会话
+          localStorage.removeItem('jb2_currentUser');
         }
+      } else if(sessionAge >= SESSION_TIMEOUT){
+        // 会话过期，清除
+        localStorage.removeItem('jb2_currentUser');
       }
-    }catch(e){}
+    }catch(e){ localStorage.removeItem('jb2_currentUser'); }
   }
   switchRole('employee');
   setTimeout(showInstallGuide, 3000);
