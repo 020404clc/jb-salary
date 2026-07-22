@@ -1,5 +1,5 @@
 // Service Worker - 离线缓存 v111 (同步保护+防反馈循环)
-const CACHE_NAME='jb-salary-v120';
+const CACHE_NAME='jb-salary-v121';
 const urlsToCache = ['./', './index.html'];
 
 self.addEventListener('install', event => {
