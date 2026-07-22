@@ -1683,6 +1683,8 @@ async function syncFromSupabase(showToast){
     renderAdmin();
     if(currentEmp){
       renderEmpPage();
+      renderEmpSessions();
+      renderEmpMyData();
     } else {
       // 员工未登录时，更新登录页的员工下拉列表
       renderEmpSelect();
@@ -1690,7 +1692,7 @@ async function syncFromSupabase(showToast){
     return true;
   } finally {
     sbSyncInProgress = false;
-    sbDirtyTables.delete(localKey); // 上传完成，清除脏标记
+    sbDirtyTables.clear(); // 上传完成，清除所有脏标记
     if(sbSyncQueue.length > 0){
       const queue = [...sbSyncQueue];
       sbSyncQueue = [];
@@ -1878,6 +1880,16 @@ async function _sbSyncEmployees(data){
 
 // ---------- sessions 专用同步 ----------
 async function _sbSyncSessions(data){
+  // 确保员工已同步到云端（否则profileIdMap/empIdMap映射会失败），5分钟缓存
+  const now = Date.now();
+  if(now - sbLastEmployeeSync > 300000){
+    const localEmployees = DB.getEmployees();
+    if(localEmployees && localEmployees.length > 0){
+      await _sbSyncEmployees(localEmployees);
+      sbLastEmployeeSync = now;
+    }
+  }
+
   const { data: existingSess } = await sbClient.from('sessions').select('*');
   // local_id → session row
   const sessByLocalId = {};
@@ -5341,13 +5353,16 @@ let empSchSelectedDate='';
 
 async function renderEmpSelect(){
   const select=document.getElementById('empSelect');
-  select.innerHTML='<option value="">请选择</option>';
-  // 优先从 profiles 表加载（按名字去重）
+  // 先用本地数据快速填充
+  const emps=DB.getEmployees();
+  select.innerHTML='<option value="">请选择</option>'+emps.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
+  // 异步尝试从云端更新
   if(sbClient){
     try{
       const{data:profiles}=await sbClient.from('profiles').select('*').eq('role','employee');
       if(profiles&&profiles.length){
         const seenNames=new Set();
+        select.innerHTML='<option value="">请选择</option>';
         profiles.forEach(p=>{
           if(seenNames.has(p.name))return;
           seenNames.add(p.name);
@@ -5356,13 +5371,9 @@ async function renderEmpSelect(){
           opt.textContent=p.name;
           select.appendChild(opt);
         });
-        return;
       }
     }catch(e){console.warn('[Auth] 加载profiles失败:',e);}
   }
-  // 回退到本地 employees 表
-  const emps=DB.getEmployees();
-  select.innerHTML='<option value="">请选择</option>'+emps.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
 }
 
 async function empLogin(){
@@ -6124,6 +6135,21 @@ function showInstallGuide(){
   // 先强制清除所有 active，再切换到员工端
   document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  // 恢复员工登录状态
+  const savedUser = localStorage.getItem('jb2_currentUser');
+  if(savedUser){
+    try{
+      const u = JSON.parse(savedUser);
+      if(u && u.role === 'employee' && u.employeeId){
+        const emp = empById(u.employeeId);
+        if(emp){
+          currentEmp = emp;
+          document.getElementById('empLogin').style.display='none';
+          document.getElementById('empContent').style.display='block';
+        }
+      }
+    }catch(e){}
+  }
   switchRole('employee');
   setTimeout(showInstallGuide, 3000);
 })();
