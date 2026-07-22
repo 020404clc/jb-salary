@@ -518,9 +518,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
 .month-cal-cell:active{background:rgba(233,69,96,.15)}
 .week-day:active{opacity:.8}
 
+/* Pull to refresh indicator */
+#pullRefreshIndicator{
+  position:fixed;top:-50px;left:50%;transform:translateX(-50%);
+  width:36px;height:36px;border-radius:50%;
+  background:rgba(233,69,96,.15);backdrop-filter:blur(10px);
+  display:flex;align-items:center;justify-content:center;
+  transition:top .2s ease,opacity .2s ease;opacity:0;z-index:9999;
+  pointer-events:none;
+}
+#pullRefreshIndicator.visible{opacity:1}
+#pullRefreshIndicator .ptr-icon{
+  width:20px;height:20px;border:2px solid #e94560;border-top-color:transparent;
+  border-radius:50%;transition:transform .2s;
+}
+#pullRefreshIndicator.spinning .ptr-icon{animation:ptrSpin .6s linear infinite}
+@keyframes ptrSpin{to{transform:rotate(360deg)}}
+#pullRefreshIndicator.done .ptr-icon{border-color:#4ade80;border-top-color:#4ade80}
+
 </style>
 </head>
 <body>
+<div id="pullRefreshIndicator"><div class="ptr-icon"></div></div>
 
 <!-- ===== HEADER ===== -->
 <div class="header">
@@ -1460,16 +1479,41 @@ async function syncFromSupabase(showToast){
       const { data: sessRows, error: sErr } = await sbClient.from('sessions').select('*');
       const { data: dmRows, error: dErr } = await sbClient.from('session_dm').select('*');
       if(!sErr && !dErr && sessRows){
+        // 获取 profiles UUID→name 映射（用于名字匹配）
+        const { data: profRows } = await sbClient.from('profiles').select('id,name').eq('role','employee');
+        const profNameMap = {};
+        if(profRows) profRows.forEach(p => { profNameMap[p.id] = p.name; });
         const dmMap = {};
         if(dmRows) dmRows.forEach(dm => {
           if(!dmMap[dm.session_id]) dmMap[dm.session_id] = [];
-          const resolvedEmp = empIdReverseMap[dm.employee_id];
-          let dmEmployeeId = resolvedEmp || dm.employee_id;
-          // 如果 empIdReverseMap 返回的是 name（fallback 2），按名字查找本地员工
-          if(resolvedEmp && typeof resolvedEmp === 'string' && isNaN(resolvedEmp)){
-            const localEmp = (DB.getEmployees()||[]).find(e => e.name === resolvedEmp);
+          let dmEmployeeId = null;
+          const notesStr = dm.notes || '';
+          // 方法1：从 notes 提取 DM 名字（推送时编码的 [DM:xxx]）
+          const dmTagMatch = notesStr.match(/\[DM:([^\]]+)\]/);
+          if(dmTagMatch){
+            const dmName = dmTagMatch[1];
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === dmName);
             if(localEmp) dmEmployeeId = localEmp.id;
           }
+          // 方法2 fallback：从 profiles 表查名字，再匹配本地员工
+          if(dmEmployeeId === null && profNameMap[dm.employee_id]){
+            const profName = profNameMap[dm.employee_id];
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === profName);
+            if(localEmp) dmEmployeeId = localEmp.id;
+          }
+          // 方法3 fallback：empIdReverseMap（旧逻辑）
+          if(dmEmployeeId === null){
+            const resolved = empIdReverseMap[dm.employee_id];
+            if(resolved !== undefined && resolved !== null){
+              if(typeof resolved === 'number') dmEmployeeId = resolved;
+              else if(typeof resolved === 'string' && isNaN(resolved)){
+                const localEmp = (DB.getEmployees()||[]).find(e => e.name === resolved);
+                if(localEmp) dmEmployeeId = localEmp.id;
+              } else { dmEmployeeId = resolved; }
+            }
+          }
+          // 最终兜底
+          if(dmEmployeeId === null) dmEmployeeId = dm.employee_id;
           dmMap[dm.session_id].push({
             employeeId: dmEmployeeId,
             effectiveHours: dm.share_ratio,
@@ -1535,16 +1579,46 @@ async function syncFromSupabase(showToast){
       const { data: schRows, error: sErr2 } = await sbClient.from('schedules').select('*');
       const { data: schDmRows, error: sdErr } = await sbClient.from('schedule_dm').select('*');
       if(!sErr2 && !sdErr && schRows){
+        // 获取 profiles UUID→name 映射（如果上面 session_dm 拉取时没获取过）
+        let schProfNameMap = {};
+        if(typeof profNameMap !== 'undefined'){
+          schProfNameMap = profNameMap;
+        } else {
+          const { data: schProfRows } = await sbClient.from('profiles').select('id,name').eq('role','employee');
+          if(schProfRows) schProfRows.forEach(p => { schProfNameMap[p.id] = p.name; });
+        }
         const schDmMap = {};
         if(schDmRows) schDmRows.forEach(sdm => {
           if(!schDmMap[sdm.schedule_id]) schDmMap[sdm.schedule_id] = [];
-          const resolvedSchEmp = empIdReverseMap[sdm.employee_id];
-          let schDmId = resolvedSchEmp || sdm.employee_id;
-          if(resolvedSchEmp && typeof resolvedSchEmp === 'string' && isNaN(resolvedSchEmp)){
-            const localEmp2 = (DB.getEmployees()||[]).find(e => e.name === resolvedSchEmp);
-            if(localEmp2) schDmId = localEmp2.id;
+          let schDmId = null;
+          const sdNotes = sdm.notes || '';
+          const sdTagMatch = sdNotes.match(/\[DM:([^\]]+)\]/);
+          const sdUserNotes = sdNotes.replace(/\[DM:[^\]]+\]/, '').trim();
+          // 方法1：从 notes 提取 DM 名字
+          if(sdTagMatch){
+            const sdName = sdTagMatch[1];
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === sdName);
+            if(localEmp) schDmId = localEmp.id;
           }
-          schDmMap[sdm.schedule_id].push({ dmId: schDmId, notes: sdm.notes || '' });
+          // 方法2 fallback：从 profiles 表查名字
+          if(schDmId === null && schProfNameMap[sdm.employee_id]){
+            const pn = schProfNameMap[sdm.employee_id];
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === pn);
+            if(localEmp) schDmId = localEmp.id;
+          }
+          // 方法3 fallback：empIdReverseMap
+          if(schDmId === null){
+            const resolvedSchEmp = empIdReverseMap[sdm.employee_id];
+            if(resolvedSchEmp !== undefined && resolvedSchEmp !== null){
+              if(typeof resolvedSchEmp === 'number') schDmId = resolvedSchEmp;
+              else if(typeof resolvedSchEmp === 'string' && isNaN(resolvedSchEmp)){
+                const localEmp2 = (DB.getEmployees()||[]).find(e => e.name === resolvedSchEmp);
+                if(localEmp2) schDmId = localEmp2.id;
+              } else { schDmId = resolvedSchEmp; }
+            }
+          }
+          if(schDmId === null) schDmId = sdm.employee_id;
+          schDmMap[sdm.schedule_id].push({ dmId: schDmId, notes: sdUserNotes });
         });
         const localSchedules = schRows.map(sr => {
           const local = _sbCloudToLocal('schedules', sr);
@@ -2038,13 +2112,15 @@ async function _sbSyncSessions(data){
           console.warn('[Supabase] session_dm跳过：本地员工ID', dm.employeeId, '无法映射到云端UUID，请先确保员工已同步到云端');
           continue;
         }
+        const _dmEmp = (DB.getEmployees()||[]).find(e => empIdMatch(e.id, dm.employeeId));
+        const _dmName = _dmEmp ? _dmEmp.name : '';
         await sbClient.from('session_dm').insert({
           session_id: cloudSessId,
           employee_id: cloudEmpId,
           dm_choice: dm.midnightChoice || 'midnight',
           share_ratio: dm.effectiveHours || 0,
           overtime_fee: dm.overtimeFeePerPerson || 0,
-          notes: ''
+          notes: _dmName ? `[DM:${_dmName}]` : ''
         });
       }
       if(skippedDms === sess.dms.length){
@@ -2130,11 +2206,15 @@ async function _sbSyncSchedules(data){
           console.warn('[Supabase] schedule_dm跳过：本地员工ID', dm.dmId, '无法映射到云端UUID，请先确保员工已同步到云端');
           continue;
         }
+        const _schDmEmp = (DB.getEmployees()||[]).find(e => empIdMatch(e.id, dm.dmId));
+        const _schDmName = _schDmEmp ? _schDmEmp.name : '';
+        const _userNotes = dm.notes || '';
+        const _combinedNotes = _schDmName ? `[DM:${_schDmName}]${_userNotes}` : _userNotes;
         await sbClient.from('schedule_dm').insert({
           schedule_id: cloudSchId,
           employee_id: cloudSchEmpId,
           work_type: '',
-          notes: dm.notes || ''
+          notes: _combinedNotes
         });
       }
       if(skippedSchDms === sch.dms.length){
@@ -5500,7 +5580,10 @@ async function empLogin(){
         if(!pwdMatch&&emp){
           // 回退验证：用 employees 表的密码
           if(emp.password&&pwd===emp.password)pwdMatch=true;
-          if(!emp.password&&pwd===(emp.phone||'').slice(-4))pwdMatch=true;
+          if(!emp.password){
+            const ph=(emp.phone||'').slice(-4);
+            if(ph&&pwd===ph)pwdMatch=true;
+          }
         }
       }else{
         // 没有关联的 employee，尝试用 name 匹配
@@ -5508,7 +5591,10 @@ async function empLogin(){
         if(emp)employeeId=emp.id;
         if(!pwdMatch&&emp){
           if(emp.password&&pwd===emp.password)pwdMatch=true;
-          if(!emp.password&&pwd===(emp.phone||'').slice(-4))pwdMatch=true;
+          if(!emp.password){
+            const ph2=(emp.phone||'').slice(-4);
+            if(ph2&&pwd===ph2)pwdMatch=true;
+          }
         }
       }
       if(!pwdMatch){toast('密码错误');return;}
@@ -5535,7 +5621,11 @@ async function empLogin(){
     if(!emp){toast('员工不存在');return;}
     employeeId=emp.id;
     if(emp.password&&pwd!==emp.password){toast('密码错误');return;}
-    if(!emp.password&&pwd!==((emp.phone||'').slice(-4))){toast('密码错误（默认手机后4位）');return;}
+    if(!emp.password){
+      const phoneSuffix=(emp.phone||'').slice(-4);
+      if(!phoneSuffix){toast('该员工未设置密码和手机号，请先在管理端设置');return;}
+      if(pwd!==phoneSuffix){toast('密码错误（默认手机后4位）');return;}
+    }
   }
 
   currentEmp=emp;
@@ -5548,6 +5638,7 @@ async function empLogin(){
       profileId:profileId,
       employeeId:employeeId
     };
+    currentUser.loginTimestamp = Date.now();
     localStorage.setItem('jb2_currentUser',JSON.stringify(currentUser));
   }
   empViewDate=todayStr();
@@ -6228,20 +6319,28 @@ function showInstallGuide(){
   // 先强制清除所有 active，再切换到员工端
   document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  // 恢复员工登录状态
+  // 恢复员工登录状态（需要带时间戳验证，超过24小时需重新登录）
   const savedUser = localStorage.getItem('jb2_currentUser');
   if(savedUser){
     try{
       const u = JSON.parse(savedUser);
-      if(u && u.role === 'employee' && u.employeeId){
+      const sessionAge = Date.now() - (u.loginTimestamp || 0);
+      const SESSION_TIMEOUT = 24 * 60 * 60 * 1000; // 24小时过期
+      if(u && u.role === 'employee' && u.employeeId && sessionAge < SESSION_TIMEOUT){
         const emp = empById(u.employeeId);
         if(emp){
           currentEmp = emp;
           document.getElementById('empLogin').style.display='none';
           document.getElementById('empContent').style.display='block';
+        } else {
+          // 员工不存在了，清除会话
+          localStorage.removeItem('jb2_currentUser');
         }
+      } else if(sessionAge >= SESSION_TIMEOUT){
+        // 会话过期，清除
+        localStorage.removeItem('jb2_currentUser');
       }
-    }catch(e){}
+    }catch(e){ localStorage.removeItem('jb2_currentUser'); }
   }
   switchRole('employee');
   setTimeout(showInstallGuide, 3000);
@@ -6669,6 +6768,70 @@ function renderRechargeList(){
   }
   el.innerHTML=html;
 }
+
+// ===== Pull to Refresh =====
+(function(){
+  const indicator = document.getElementById('pullRefreshIndicator');
+  let startY = 0, pulling = false, pulled = false, refreshDone = false;
+  const THRESHOLD = 60;
+
+  document.addEventListener('touchstart', function(e){
+    if(window.scrollY <= 0){
+      startY = e.touches[0].clientY;
+      pulling = true;
+      pulled = false;
+      refreshDone = false;
+    }
+  }, {passive:true});
+
+  document.addEventListener('touchmove', function(e){
+    if(!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if(dy > 10 && window.scrollY <= 0){
+      pulled = true;
+      e.preventDefault();
+      const progress = Math.min(dy / THRESHOLD, 1);
+      indicator.style.top = (-50 + dy * 0.6) + 'px';
+      indicator.classList.add('visible');
+      indicator.classList.remove('spinning','done');
+      const icon = indicator.querySelector('.ptr-icon');
+      if(icon) icon.style.transform = 'rotate(' + (progress * 360) + 'deg)';
+    }
+  }, {passive:false});
+
+  document.addEventListener('touchend', async function(e){
+    if(!pulling || !pulled){ pulling = false; return; }
+    pulling = false;
+    const dy = e.changedTouches[0].clientY - startY;
+    if(dy >= THRESHOLD && !refreshDone){
+      refreshDone = true;
+      indicator.classList.add('spinning');
+      indicator.style.top = '10px';
+      try{
+        await syncFromSupabase(true);
+        // Re-render current view
+        if(typeof renderAdmin === 'function' && document.getElementById('adminPage').classList.contains('active')){
+          renderAdmin();
+        }
+        if(typeof renderEmpPage === 'function' && document.getElementById('employeePage').classList.contains('active') && currentEmp){
+          renderEmpPage();
+        }
+        indicator.classList.remove('spinning');
+        indicator.classList.add('done');
+      }catch(err){
+        console.warn('[PTR] sync error:', err);
+        indicator.classList.remove('spinning');
+      }
+      setTimeout(function(){
+        indicator.style.top = '-50px';
+        indicator.classList.remove('visible','done');
+      }, 600);
+    } else {
+      indicator.style.top = '-50px';
+      indicator.classList.remove('visible','spinning','done');
+    }
+  }, {passive:true});
+})();
 </script>
 
 <!-- ===== ADMIN LOGIN MODAL ===== -->
