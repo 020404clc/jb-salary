@@ -1423,9 +1423,8 @@ async function syncFromSupabase(showToast){
           localStorage.setItem('jb2_employees', JSON.stringify(localEmps));
           successCount++;
         } else {
-          // 云端为空时，也清空本地（确保删除操作能同步）
-          localStorage.setItem('jb2_employees', JSON.stringify([]));
-          console.log('[Supabase] 云端 employees 为空，已清空本地数据');
+          // 云端为空时保留本地数据（防止数据丢失）
+          console.log('[Supabase] 云端 employees 为空，保留本地数据');
           successCount++;
         }
       } else {
@@ -1476,11 +1475,15 @@ async function syncFromSupabase(showToast){
           delete local.deducted_card_phone; delete local.created_by;
           return local;
         });
-        // 始终用云端数据覆盖本地（确保删除操作能同步）
         // 去重：按local_id去重，防止云端重复记录
         const _sessSeen = new Set();
-        const _sessDeduped = localSessions.filter(s => { if(_sessSeen.has(s.id)) return false; _sessSeen.add(s.id); return true; });
-        localStorage.setItem('jb2_sessions', JSON.stringify(_sessDeduped));
+        const _sessDeduped = localSessions.filter(s => { if(s.id === undefined || s.id === null) return true; if(_sessSeen.has(s.id)) return false; _sessSeen.add(s.id); return true; });
+        // 合并策略：云端数据优先，保留本地未同步的场次
+        const existingLocalSess = JSON.parse(localStorage.getItem('jb2_sessions') || '[]');
+        const sessCloudIds = new Set(_sessDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
+        const sessLocalOnly = existingLocalSess.filter(s => s.id !== undefined && s.id !== null && !sessCloudIds.has(s.id));
+        const mergedSess = _sessDeduped.concat(sessLocalOnly);
+        localStorage.setItem('jb2_sessions', JSON.stringify(mergedSess));
         successCount++;
       } else {
         if(sErr && sErr.code !== '42P01') failCount++;
@@ -1517,11 +1520,15 @@ async function syncFromSupabase(showToast){
           delete local.player_count; delete local.session_type;
           return local;
         });
-        // 始终用云端数据覆盖本地（确保删除操作能同步）
         // 去重：按local_id去重，防止云端重复记录
         const _schSeen = new Set();
-        const _schDeduped = localSchedules.filter(s => { if(_schSeen.has(s.id)) return false; _schSeen.add(s.id); return true; });
-        localStorage.setItem('jb2_schedules', JSON.stringify(_schDeduped));
+        const _schDeduped = localSchedules.filter(s => { if(s.id === undefined || s.id === null) return true; if(_schSeen.has(s.id)) return false; _schSeen.add(s.id); return true; });
+        // 合并策略：云端数据优先，但保留本地未同步的排班（防止数据丢失）
+        const existingLocalSch = JSON.parse(localStorage.getItem('jb2_schedules') || '[]');
+        const schCloudIds = new Set(_schDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
+        const schLocalOnly = existingLocalSch.filter(s => s.id !== undefined && s.id !== null && !schCloudIds.has(s.id));
+        const mergedSch = _schDeduped.concat(schLocalOnly);
+        localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch));
         successCount++;
       } else {
         if(sErr2 && sErr2.code !== '42P01') failCount++;
@@ -1584,10 +1591,12 @@ async function syncFromSupabase(showToast){
                 mergedData.push(local);
               }
             });
-            // 只有云端有数据时才覆盖本地
-            if(mergedData.length > 0){
-              localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
-            }
+            // 合并策略：云端数据优先，保留本地未同步记录
+            const existingLocalRO = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
+            const roCloudIds = new Set(mergedData.filter(r => r.id !== undefined && r.id !== null).map(r => r.id));
+            const roLocalOnly = existingLocalRO.filter(r => r.id !== undefined && r.id !== null && !roCloudIds.has(r.id));
+            const finalRO = mergedData.concat(roLocalOnly);
+            localStorage.setItem('jb2_' + localKey, JSON.stringify(finalRO));
             successCount++;
             continue;
           }
@@ -1606,22 +1615,26 @@ async function syncFromSupabase(showToast){
                 mergedData.push(local);
               }
             });
-            // 始终用云端数据覆盖本地（确保删除操作能同步）
-            localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
+            // 合并策略：云端数据优先，保留本地未同步记录
+            const existingLocalDO = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
+            const doCloudIds = new Set(mergedData.filter(r => r.id !== undefined && r.id !== null).map(r => r.id));
+            const doLocalOnly = existingLocalDO.filter(r => r.id !== undefined && r.id !== null && !doCloudIds.has(r.id));
+            const finalDO = mergedData.concat(doLocalOnly);
+            localStorage.setItem('jb2_' + localKey, JSON.stringify(finalDO));
             successCount++;
             continue;
           }
-          // 去重：scripts按name去重，schedules按date+scriptId去重
+          // 去重：scripts按name去重
           if(localKey === 'scripts'){
             const seen = new Set();
             localData = localData.filter(s => { if(seen.has(s.name)) return false; seen.add(s.name); return true; });
           }
-          if(localKey === 'schedules'){
-            const seen = new Set();
-            localData = localData.filter(s => { const k = s.date+'_'+s.scriptId; if(seen.has(k)) return false; seen.add(k); return true; });
-          }
-          // 始终用云端数据覆盖本地（确保删除操作能同步）
-          localStorage.setItem('jb2_' + localKey, JSON.stringify(localData));
+          // 合并策略：云端数据优先，但保留本地未同步的记录（防止数据丢失）
+          const existingLocal = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
+          const cloudLocalIds = new Set(localData.filter(r => r.id !== undefined && r.id !== null).map(r => r.id));
+          const localOnly = existingLocal.filter(r => r.id !== undefined && r.id !== null && !cloudLocalIds.has(r.id));
+          const mergedData = localData.concat(localOnly);
+          localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
           successCount++;
         }
       } catch(e){
@@ -1848,8 +1861,8 @@ async function _sbSyncSessions(data){
     for(const s of existingSess){
       if(s.local_id !== null){
         if(_sessDup[s.local_id]){
-          sbClient.from('session_dm').delete().eq('session_id', s.id);
-          sbClient.from('sessions').delete().eq('id', s.id);
+          await sbClient.from('session_dm').delete().eq('session_id', s.id);
+          await sbClient.from('sessions').delete().eq('id', s.id);
           console.log('[Supabase] 清理重复session:', s.id, 'local_id:', s.local_id);
         } else {
           _sessDup[s.local_id] = true;
@@ -1931,8 +1944,8 @@ async function _sbSyncSchedules(data){
       if(s.local_id !== null){
         if(_schDup[s.local_id]){
           // 重复记录，删除多余的
-          sbClient.from('schedule_dm').delete().eq('schedule_id', s.id);
-          sbClient.from('schedules').delete().eq('id', s.id);
+          await sbClient.from('schedule_dm').delete().eq('schedule_id', s.id);
+          await sbClient.from('schedules').delete().eq('id', s.id);
           console.log('[Supabase] 清理重复schedule:', s.id, 'local_id:', s.local_id);
         } else {
           _schDup[s.local_id] = true;
