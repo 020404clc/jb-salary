@@ -1476,9 +1476,35 @@ async function syncFromSupabase(showToast){
           console.log('[Supabase] 跳过脏表 sessions');
           // 不覆盖本地数据
         } else {
-        const sessCloudIds = new Set(_sessDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
-        const sessLocalOnly = existingLocalSess.filter(s => s.id !== undefined && s.id !== null && !sessCloudIds.has(s.id));
-        const mergedSess = _sessDeduped.concat(sessLocalOnly);
+        // 安全检查：对云端拉回的每条 session，检查其 dms 中的 employeeId 是否能被本地 empById 解析
+        // 如果不能解析（说明映射失败），则保留本地版本而不是用云端版本覆盖
+        const _validCloudSess = [];
+        const _invalidCloudSessIds = new Set();
+        for(const cs of _sessDeduped){
+          if(cs.dms && cs.dms.length > 0){
+            const allValid = cs.dms.every(dm => {
+              const eid = dm.employeeId;
+              // 如果是数字或数字字符串，认为是有效本地ID
+              if(typeof eid === 'number' || !isNaN(Number(eid))) return true;
+              // 如果是 UUID 格式且本地找不到，认为映射失败
+              return !!empById(eid);
+            });
+            if(!allValid){
+              _invalidCloudSessIds.add(cs.id);
+              continue; // 跳过这条云端记录，保留本地版本
+            }
+          }
+          _validCloudSess.push(cs);
+        }
+        // 合并：有效云端 + 本地未被云端覆盖的 + 本地映射失败的（保留原本地版本）
+        const validCloudIds = new Set(_validCloudSess.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
+        const sessLocalOnly = existingLocalSess.filter(s => {
+          if(s.id === undefined || s.id === null) return false;
+          // 如果云端映射失败，保留本地版本
+          if(_invalidCloudSessIds.has(s.id)) return true;
+          return !validCloudIds.has(s.id);
+        });
+        const mergedSess = _validCloudSess.concat(sessLocalOnly);
         localStorage.setItem('jb2_sessions', JSON.stringify(mergedSess));
         }
         successCount++;
@@ -1526,9 +1552,35 @@ async function syncFromSupabase(showToast){
           console.log('[Supabase] 跳过脏表 schedules');
           // 不覆盖本地数据
         } else {
-        const schCloudIds = new Set(_schDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
-        const schLocalOnly = existingLocalSch.filter(s => s.id !== undefined && s.id !== null && !schCloudIds.has(s.id));
-        const mergedSch = _schDeduped.concat(schLocalOnly);
+        // 安全检查：对云端拉回的每条 schedule，检查其 dms 中的 dmId 是否能被本地 empById 解析
+        // 如果不能解析（说明映射失败），则保留本地版本而不是用云端版本覆盖
+        const _validCloudSch = [];
+        const _invalidCloudSchIds = new Set();
+        for(const cs of _schDeduped){
+          if(cs.dms && cs.dms.length > 0){
+            const allValid = cs.dms.every(dm => {
+              const eid = dm.dmId;
+              // 如果是数字或数字字符串，认为是有效本地ID
+              if(typeof eid === 'number' || !isNaN(Number(eid))) return true;
+              // 如果是 UUID 格式且本地找不到，认为映射失败
+              return !!empById(eid);
+            });
+            if(!allValid){
+              _invalidCloudSchIds.add(cs.id);
+              continue; // 跳过这条云端记录，保留本地版本
+            }
+          }
+          _validCloudSch.push(cs);
+        }
+        // 合并：有效云端 + 本地未被云端覆盖的 + 本地映射失败的（保留原本地版本）
+        const validSchCloudIds = new Set(_validCloudSch.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
+        const schLocalOnly = existingLocalSch.filter(s => {
+          if(s.id === undefined || s.id === null) return false;
+          // 如果云端映射失败，保留本地版本
+          if(_invalidCloudSchIds.has(s.id)) return true;
+          return !validSchCloudIds.has(s.id);
+        });
+        const mergedSch = _validCloudSch.concat(schLocalOnly);
         localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').trim()}))));
         }
         successCount++;
@@ -1685,6 +1737,7 @@ async function syncFromSupabase(showToast){
       renderEmpPage();
       renderEmpSessions();
       renderEmpMyData();
+      renderEmpScheduleView();
     } else {
       // 员工未登录时，更新登录页的员工下拉列表
       renderEmpSelect();
@@ -1812,11 +1865,13 @@ async function _sbSyncToSupabase(localKey, data){
     }
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
+    // 推送完成后主动拉取一次，确保其他设备的数据也同步过来
+    setTimeout(()=>{ syncFromSupabase(false); }, 500);
   } catch(e){
     console.warn('[Supabase] 同步', localKey, '异常:', e);
   } finally {
     // 延迟清除自触发标记，等实时订阅的回调窗口过去后再允许拉取
-    setTimeout(()=>{ sbSelfTriggering = false; }, 2000);
+    setTimeout(()=>{ sbSelfTriggering = false; }, 1500);
   }
 }
 
@@ -2177,13 +2232,13 @@ function subscribeToSupabaseChanges(){
       { event: '*', schema: 'public', table: tableName },
       (payload) => {
         console.log('[Supabase] 实时变更:', tableName, payload.eventType);
-        // 去重：延迟3秒再拉取，合并短时间内的多次变更
+        // 去重：延迟1.5秒再拉取，合并短时间内的多次变更
         clearTimeout(sbSyncDebounceTimer);
         sbSyncDebounceTimer = setTimeout(()=>{
           if(!sbSelfTriggering){
             syncFromSupabase(false);
           }
-        }, 3000);
+        }, 1500);
       }
     );
   });
@@ -4209,7 +4264,7 @@ function saveSchedule(){
   closeModal('scheduleModal');
   renderSchCalendar();
   renderScheduleList();
-  if(currentEmp) renderEmpPage();
+  if(currentEmp){ renderEmpPage(); renderEmpScheduleView(); }
   
   // Check if any DM had 调休 on this date and refund resources
   // schedules already declared above
@@ -4291,7 +4346,7 @@ function deleteSchedule(id){
   DB.saveSchedules(updated);
   renderSchCalendar();
   renderScheduleList();
-  if(currentEmp) renderEmpPage();
+  if(currentEmp){ renderEmpPage(); renderEmpScheduleView(); }
   toast(before>updated.length?'已删除排班':'未找到匹配记录');
 }
 
@@ -4590,7 +4645,7 @@ function saveSession(){
   
   closeModal('sessionModal');
   renderAdmin();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); }
+  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
   toast('场次已保存');
 }
 
@@ -4607,7 +4662,7 @@ function deleteSession(id){
   DB.saveSchedules(schedules);
   DB.saveSessions(DB.getSessions().filter(s=>s.id!==id));
   renderAdmin();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); }
+  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
 }
 
 // ========================================
@@ -5041,7 +5096,7 @@ function saveTDConsumption(){
   DB.saveTDConsumptions(consumptions);
   closeModal('tdConsumeModal');
   renderTimeDiff();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); }
+  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
   toast(useBalanceForDayOff?'调休已记录（消耗9.5h时差）':'时差消耗已记录');
 }
 
@@ -5112,7 +5167,7 @@ function saveLeave(){
   DB.saveTDConsumptions(consumptions);
   closeModal('leaveModal');
   renderTimeDiff();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); }
+  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
   toast('请假已记录');
 }
 
@@ -5236,7 +5291,7 @@ function doMakeupCard(empId, date, fromModal) {
   if (fromModal) closeModal('makeupModal');
   renderTimeDiff();
   renderAttendance();
-  if (currentEmp) { renderEmpPage(); renderEmpSessions(); renderEmpMyData(); }
+  if (currentEmp) { renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
 }
 
 function getAdjustedStartTime(empId,date){
@@ -5326,7 +5381,7 @@ function saveTDExchange(){
   }
   closeModal('tdExchangeModal');
   renderTimeDiff();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); }
+  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
   toast('操作成功');
 }
 
@@ -5337,7 +5392,7 @@ function deleteTDAdjustment(adjId){
   adjustments.splice(idx, 1);
   DB.saveTDAdjustments(adjustments);
   renderTimeDiff();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); }
+  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
   toast('已撤销该调整');
 }
 
@@ -5724,6 +5779,7 @@ function deleteEmpSession(id){
   renderEmpSessions();
   renderEmpPage();
   renderEmpMyData();
+  renderEmpScheduleView();
   toast('场次已删除');
 }
 
@@ -6255,7 +6311,7 @@ function deleteConsumption(id){
   const consumptions=DB.getTDConsumptions().filter(c=>c.id!==id);
   DB.saveTDConsumptions(consumptions);
   renderTimeDiff();
-  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();}
+  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();renderEmpScheduleView();}
   toast('已删除');
 }
 function deleteExchange(id){
@@ -6263,7 +6319,7 @@ function deleteExchange(id){
   const exchanges=DB.getTDExchanges().filter(x=>x.id!==id);
   DB.saveTDExchanges(exchanges);
   renderTimeDiff();
-  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();}
+  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();renderEmpScheduleView();}
   toast('已删除');
 }
 // 一键清除指定员工的所有时差消耗和兑换记录（控制台用）
@@ -6290,7 +6346,7 @@ function clearEmpTDEmpRecords(nameOrId){
   const removed1=before1-after1,removed2=before2-after2;
   console.log(`✅ ${emp.name} 的时差记录已清除并归档: 消耗记录${removed1}条, 兑换记录${removed2}条`);
   renderTimeDiff();
-  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();}
+  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();renderEmpScheduleView();}
   return `已清除并归档 ${emp.name} 的 ${removed1} 条消耗 + ${removed2} 条兑换记录`;
 }
 
@@ -6345,7 +6401,7 @@ function clearAllTDRecords(){
   DB.saveTDExchanges([]);
   console.log(`✅ 已清除全部时差消耗(${cons.length}条)和兑换(${exchs.length}条)记录，已归档`);
   renderTimeDiff();
-  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();}
+  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();renderEmpScheduleView();}
   return 'done';
 }
 
