@@ -2766,7 +2766,7 @@ function renderSessionTable(){
         <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡: ¥'+s.deductionAmount+' (尾号'+(s.deductedCardPhone||'?')+')':''}</div>
         <div>服装: ${s.costumeId||'-'}</div>
         <div>DM详情: ${s.dms.map(d=>empName(d.employeeId)+'('+d.effectiveHours+'h, 加时¥'+(d.overtimeFeePerPerson||0)+'/人)').join(', ')}</div>
-        ${s.notes?'<div>备注: '+s.notes+'</div>':''}
+        ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim())+'</div>':''}
         <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-info btn-sm" onclick="event.stopPropagation();editSession(${s.id})" style="font-size:10px;padding:3px 10px">编辑</button><button class="btn btn-sm" onclick="event.stopPropagation();deleteSession(${s.id})" style="font-size:10px;padding:3px 10px;background:var(--accent);color:#fff">删除</button></div>
       </div>
     </div>`;
@@ -4018,7 +4018,7 @@ function renderScheduleList(){
         <div class="session-info">
           <span>&#128100; ${dmNames||'未分配DM'}</span>
           ${pcHtml}
-          ${sch.notes?'<span>&#128221; '+sch.notes+'</span>':''}
+          ${sch.notes?'<span>&#128221; '+(sch.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim())+'</span>':''}
           ${linkedSession?'<span>&#9989; 已关联场次</span>':''}
         </div>
         <div class="sch-card-actions">
@@ -5543,7 +5543,7 @@ function renderEmpSessions(){
         <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡: ¥'+s.deductionAmount+' (尾号'+(s.deductedCardPhone||'?')+')':''}</div>
         <div>加时费/人: &yen;${dm?.overtimeFeePerPerson||0}</div>
         <div>DM: ${s.dms.map(d=>empName(d.employeeId)+'('+d.effectiveHours+'h)').join(', ')}</div>
-        ${s.notes?'<div>备注: '+s.notes+'</div>':''}
+        ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim())+'</div>':''}
       </div>
     </div>`;
   }).join('');
@@ -5787,7 +5787,7 @@ function renderEmpScheduleView(){
         <div class="sch-card-detail" id="sch-detail-e${sch.id}">
           <div class="session-info">
             ${sch.playerCount?'<span>&#127922; '+sch.playerCount+'人预组</span>':''}
-            ${sch.notes?'<span>&#128221; '+sch.notes+'</span>':''}
+            ${sch.notes?'<span>&#128221; '+(sch.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim())+'</span>':''}
             ${dmNote?'<span>&#9997;&#65039; 我的备注: '+dmNote+'</span>':''}
           </div>
         </div>
