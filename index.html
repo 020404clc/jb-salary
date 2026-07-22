@@ -1232,17 +1232,43 @@ function _sbCloudToLocal(localKey, cloudRow){
 
 // 获取本地员工ID → 云端UUID的映射（用于FK引用）
 async function _sbGetEmployeeIdMap(){
-  const { data: empRows } = await sbClient.from('employees').select('id,local_id');
+  // 用 name 匹配代替 local_id（云端表没有 local_id 列）
+  const { data: empRows } = await sbClient.from('employees').select('id,profile_id');
+  const { data: profiles } = await sbClient.from('profiles').select('id,name').eq('role','employee');
   const map = {};
-  if(empRows) empRows.forEach(e => { if(e.local_id !== null && e.local_id !== undefined) map[e.local_id] = e.id; });
+  if(empRows && profiles){
+    const profById = {};
+    profiles.forEach(p => { profById[p.id] = p; });
+    const localEmps = DB.getEmployees();
+    empRows.forEach(e => {
+      const prof = profById[e.profile_id];
+      if(prof){
+        const localEmp = localEmps.find(le => le.name === prof.name);
+        if(localEmp) map[localEmp.id] = e.id;
+      }
+    });
+  }
   return map;
 }
 
 // 获取云端UUID → 本地员工ID的映射（用于反向还原）
 async function _sbGetEmployeeIdReverseMap(){
-  const { data: empRows } = await sbClient.from('employees').select('id,local_id');
+  // 用 name 匹配代替 local_id
+  const { data: empRows } = await sbClient.from('employees').select('id,profile_id');
+  const { data: profiles } = await sbClient.from('profiles').select('id,name').eq('role','employee');
   const map = {};
-  if(empRows) empRows.forEach(e => { if(e.local_id !== null && e.local_id !== undefined) map[e.id] = e.local_id; });
+  if(empRows && profiles){
+    const profById = {};
+    profiles.forEach(p => { profById[p.id] = p; });
+    const localEmps = DB.getEmployees();
+    empRows.forEach(e => {
+      const prof = profById[e.profile_id];
+      if(prof){
+        const localEmp = localEmps.find(le => le.name === prof.name);
+        if(localEmp) map[e.id] = localEmp.id;
+      }
+    });
+  }
   return map;
 }
 
@@ -1264,9 +1290,22 @@ async function _sbGetScriptIdReverseMap(){
 
 // 获取本地profile(员工)ID → 云端profile UUID的映射（用于created_by等）
 async function _sbGetProfileIdMap(){
-  const { data: empRows } = await sbClient.from('employees').select('id,local_id,profile_id');
+  // 用 name 匹配代替 local_id
+  const { data: empRows } = await sbClient.from('employees').select('id,profile_id');
+  const { data: profiles } = await sbClient.from('profiles').select('id,name').eq('role','employee');
   const map = {};
-  if(empRows) empRows.forEach(e => { if(e.local_id !== null && e.profile_id) map[e.local_id] = e.profile_id; });
+  if(empRows && profiles){
+    const profById = {};
+    profiles.forEach(p => { profById[p.id] = p; });
+    const localEmps = DB.getEmployees();
+    empRows.forEach(e => {
+      const prof = profById[e.profile_id];
+      if(prof){
+        const localEmp = localEmps.find(le => le.name === prof.name);
+        if(localEmp) map[localEmp.id] = e.profile_id;
+      }
+    });
+  }
   return map;
 }
 
@@ -1331,7 +1370,7 @@ async function syncFromSupabase(showToast){
   let failCount = 0;
 
   try {
-    // --- 1. 同步 employees（合并 profiles + employees）---
+    // --- 1. 同步 employees（合并 profiles + employees，用 name 匹配本地 ID）---
     try {
       const { data: profiles, error: pErr } = await sbClient.from('profiles').select('*').eq('role','employee');
       const { data: empRows, error: eErr } = await sbClient.from('employees').select('*');
@@ -1340,6 +1379,10 @@ async function syncFromSupabase(showToast){
         if(empRows.length > 0){
           const profileMap = {};
           profiles.forEach(p => { profileMap[p.id] = p; });
+          // 建立 name → 本地 ID 映射（用于复用已有本地 ID）
+          const existingLocalEmps = DB.getEmployees();
+          const localIdByName = {};
+          existingLocalEmps.forEach(e => { localIdByName[e.name] = e.id; });
           const seenNames = new Set();
           const localEmps = empRows.map(er => {
             const local = _sbCloudToLocal('employees', er);
@@ -1349,14 +1392,26 @@ async function syncFromSupabase(showToast){
               local.phone = profile.phone || '';
               local.password = profile.password || '';
             }
-            if(local.workType) local.workType = normalizeWorkType(local.workType);
-            // 还原 accommodationStatus（优先用 accommodation_status 文本列，否则从 boolean 列推断）
-            if(er.accommodation_status){
-              local.accommodationStatus = er.accommodation_status;
-            } else {
-              local.accommodationStatus = er.accommodation ? 'free' : 'none';
+            // 用 name 匹配本地 ID（云端没有 local_id 列）
+            if(local.name && localIdByName[local.name] !== undefined){
+              local.id = localIdByName[local.name];
+            } else if(local.name){
+              // 新员工，分配新本地 ID
+              const maxId = existingLocalEmps.length ? Math.max(...existingLocalEmps.map(e => e.id)) : 0;
+              local.id = maxId + Object.keys(localIdByName).length + 1;
+              localIdByName[local.name] = local.id;
             }
+            if(local.workType) local.workType = normalizeWorkType(local.workType);
+            // 从 accommodation 布尔值还原 accommodationStatus
+            local.accommodationStatus = er.accommodation ? 'free' : 'none';
             delete local.accommodation;
+            // 清理 _sbCloudToLocal 残留的 snake_case 字段（本地用 camelCase）
+            delete local.hire_month;
+            delete local.assess_percent;
+            delete local.guarantee_level;
+            delete local.work_type;
+            delete local.profile_id;
+            delete local.created_at;
             return local;
           }).filter(e => {
             if(!e.name) return false;
@@ -1729,22 +1784,20 @@ async function _sbSyncEmployees(data){
   // 建立 name → profile 的映射
   const profileByName = {};
   if(existingProfiles) existingProfiles.forEach(p => { profileByName[p.name] = p; });
-  // 建立 local_id → employee row 的映射
-  const empByLocalId = {};
-  if(existingEmpRows) existingEmpRows.forEach(e => { if(e.local_id !== null) empByLocalId[e.local_id] = e; });
+  // 建立 profile_id → employee row 的映射（用 profile_id 代替 local_id）
+  const empByProfileId = {};
+  if(existingEmpRows) existingEmpRows.forEach(e => { if(e.profile_id) empByProfileId[e.profile_id] = e; });
 
-  const localIds = new Set((data || []).map(d => d.id));
-  // 删除本地已不存在的 employees
-  if(existingEmpRows){
-    const toDelete = existingEmpRows.filter(e => e.local_id !== null && !localIds.has(e.local_id));
-    for(const del of toDelete){
-      await sbClient.from('employees').delete().eq('id', del.id);
-      // 也删除对应的 profile（如果不再被引用）
-      if(del.profile_id){
-        const { data: otherEmps } = await sbClient.from('employees').select('id').eq('profile_id', del.profile_id);
-        if(!otherEmps || otherEmps.length === 0){
-          await sbClient.from('profiles').delete().eq('id', del.profile_id);
-        }
+  // 建立本地员工名字集合
+  const localNames = new Set((data || []).map(d => d.name));
+  // 删除本地已不存在的 employees（通过 profile name 匹配）
+  if(existingEmpRows && existingProfiles){
+    for(const cloudEmp of existingEmpRows){
+      const cloudProfile = existingProfiles.find(p => p.id === cloudEmp.profile_id);
+      if(cloudProfile && !localNames.has(cloudProfile.name)){
+        await sbClient.from('employees').delete().eq('id', cloudEmp.id);
+        // 也删除对应的 profile
+        await sbClient.from('profiles').delete().eq('id', cloudEmp.profile_id);
       }
     }
   }
@@ -1763,18 +1816,16 @@ async function _sbSyncEmployees(data){
       if(newProfile) profileId = newProfile.id;
     }
 
-    // 2. upsert employee
+    // 2. upsert employee（不使用 local_id 和 accommodation_status）
     const empCloud = {
-      local_id: emp.id,
       profile_id: profileId,
       work_type: normalizeWorkType(emp.workType),
       guarantee_level: emp.guaranteeLevel || 0,
       hire_month: emp.hireMonth || '',
       assess_percent: emp.assessmentPercent || 0,
-      accommodation: emp.accommodationStatus === 'free',
-      accommodation_status: emp.accommodationStatus || 'none'
+      accommodation: emp.accommodationStatus === 'free'
     };
-    const existingEmp = empByLocalId[emp.id];
+    const existingEmp = profileId ? empByProfileId[profileId] : null;
     if(existingEmp){
       await sbClient.from('employees').update(empCloud).eq('id', existingEmp.id);
     } else {
@@ -5254,14 +5305,13 @@ async function empLogin(){
       // 查找关联的 employee 记录
       const{data:empRec}=await sbClient.from('employees').select('*').eq('profile_id',profileId).maybeSingle();
       if(empRec){
-        // 优先用 local_id 查找本地员工（syncFromSupabase 用 local_id 作为本地 id）
-        emp=empRec.local_id!=null?empById(empRec.local_id):null;
-        if(!emp) emp=DB.getEmployees().find(e=>e.name===profile.name);
+        // 用 name 查找本地员工（云端没有 local_id 列）
+        emp=DB.getEmployees().find(e=>e.name===profile.name);
         if(!emp){
-          // 最后兜底：用 cloud UUID 查找（极端情况）
+          // 兜底：用 cloud UUID 查找
           emp=empById(empRec.id);
         }
-        employeeId=emp?emp.id:(empRec.local_id||empRec.id);
+        employeeId=emp?emp.id:0;
         if(!pwdMatch&&emp){
           // 回退验证：用 employees 表的密码
           if(emp.password&&pwd===emp.password)pwdMatch=true;
