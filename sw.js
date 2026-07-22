@@ -1,33 +1,25 @@
-// Service Worker - 离线缓存 v126
-const CACHE_NAME='jb-salary-v130';
-const urlsToCache = ['./', './index.html', './app.html'];
+// Service Worker - 离线缓存 v133
+const CACHE_NAME='jb-salary-v133';
+const urlsToCache = ['./', './index.html', './app.html', './z-new.html'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(urlsToCache))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache))
   );
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.keys().then(names => Promise.all(
+      names.filter(n => n !== CACHE_NAME).map(n => caches.delete(n))
+    ))
   );
+  self.clients.claim();
 });
 
 self.addEventListener('fetch', event => {
   event.respondWith(
-    fetch(event.request)
-      .then(response => {
-        const responseClone = response.clone();
-        caches.open(CACHE_NAME).then(cache => {
-          cache.put(event.request, responseClone);
-        });
-        return response;
-      })
-      .catch(() => caches.match(event.request))
+    caches.match(event.request).then(r => r || fetch(event.request))
   );
 });
