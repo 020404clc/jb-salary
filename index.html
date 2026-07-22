@@ -1477,7 +1477,10 @@ async function syncFromSupabase(showToast){
           return local;
         });
         // 始终用云端数据覆盖本地（确保删除操作能同步）
-        localStorage.setItem('jb2_sessions', JSON.stringify(localSessions));
+        // 去重：按local_id去重，防止云端重复记录
+        const _sessSeen = new Set();
+        const _sessDeduped = localSessions.filter(s => { if(_sessSeen.has(s.id)) return false; _sessSeen.add(s.id); return true; });
+        localStorage.setItem('jb2_sessions', JSON.stringify(_sessDeduped));
         successCount++;
       } else {
         if(sErr && sErr.code !== '42P01') failCount++;
@@ -1515,7 +1518,10 @@ async function syncFromSupabase(showToast){
           return local;
         });
         // 始终用云端数据覆盖本地（确保删除操作能同步）
-        localStorage.setItem('jb2_schedules', JSON.stringify(localSchedules));
+        // 去重：按local_id去重，防止云端重复记录
+        const _schSeen = new Set();
+        const _schDeduped = localSchedules.filter(s => { if(_schSeen.has(s.id)) return false; _schSeen.add(s.id); return true; });
+        localStorage.setItem('jb2_schedules', JSON.stringify(_schDeduped));
         successCount++;
       } else {
         if(sErr2 && sErr2.code !== '42P01') failCount++;
@@ -1832,7 +1838,21 @@ async function _sbSyncSessions(data){
   const { data: existingSess } = await sbClient.from('sessions').select('*');
   // local_id → session row
   const sessByLocalId = {};
-  if(existingSess) existingSess.forEach(s => { if(s.local_id !== null) sessByLocalId[s.local_id] = s; });
+  if(existingSess){
+    const _sessDup = {};
+    for(const s of existingSess){
+      if(s.local_id !== null){
+        if(_sessDup[s.local_id]){
+          sbClient.from('session_dm').delete().eq('session_id', s.id);
+          sbClient.from('sessions').delete().eq('id', s.id);
+          console.log('[Supabase] 清理重复session:', s.id, 'local_id:', s.local_id);
+        } else {
+          _sessDup[s.local_id] = true;
+          sessByLocalId[s.local_id] = s;
+        }
+      }
+    }
+  }
 
   // 获取ID映射
   const empIdMap = await _sbGetEmployeeIdMap();
@@ -1900,7 +1920,22 @@ async function _sbSyncSessions(data){
 async function _sbSyncSchedules(data){
   const { data: existingSch } = await sbClient.from('schedules').select('*');
   const schByLocalId = {};
-  if(existingSch) existingSch.forEach(s => { if(s.local_id !== null) schByLocalId[s.local_id] = s; });
+  if(existingSch){
+    const _schDup = {};
+    for(const s of existingSch){
+      if(s.local_id !== null){
+        if(_schDup[s.local_id]){
+          // 重复记录，删除多余的
+          sbClient.from('schedule_dm').delete().eq('schedule_id', s.id);
+          sbClient.from('schedules').delete().eq('id', s.id);
+          console.log('[Supabase] 清理重复schedule:', s.id, 'local_id:', s.local_id);
+        } else {
+          _schDup[s.local_id] = true;
+          schByLocalId[s.local_id] = s;
+        }
+      }
+    }
+  }
 
   const empIdMap = await _sbGetEmployeeIdMap();
   const scriptIdMap = await _sbGetScriptIdMap();
