@@ -1634,6 +1634,12 @@ async function _sbSyncToSupabase(localKey, data){
     });
 
     const localIds = new Set((data || []).map(d => d.id));
+    // 保护：如果本地数据为空，不要删除云端记录（防止空localStorage覆盖）
+    if(!data || data.length === 0){
+      console.log('[Supabase]', tableName, '本地为空，跳过同步（保护云端数据）');
+      updateCloudBadge(true);
+      return;
+    }
     // 删除云端有但本地已删除的记录
     const toDeleteIds = existingRows ? existingRows.filter(r => r.local_id !== null && !localIds.has(r.local_id)).map(r => r.id) : [];
     if(toDeleteIds.length > 0){
@@ -1674,6 +1680,11 @@ async function _sbSyncToSupabase(localKey, data){
 
 // ---------- employees 专用同步 ----------
 async function _sbSyncEmployees(data){
+  // 保护：如果本地数据为空，不要删除云端数据（防止空localStorage覆盖）
+  if(!data || data.length === 0){
+    console.log('[Supabase] employees 本地为空，跳过同步（保护云端数据）');
+    return;
+  }
   // 查出已有 profiles 和 employees
   const { data: existingProfiles } = await sbClient.from('profiles').select('*').eq('role','employee');
   const { data: existingEmpRows } = await sbClient.from('employees').select('*');
@@ -1737,6 +1748,11 @@ async function _sbSyncEmployees(data){
 
 // ---------- sessions 专用同步 ----------
 async function _sbSyncSessions(data){
+  // 保护：如果本地数据为空，不要删除云端数据
+  if(!data || data.length === 0){
+    console.log('[Supabase] sessions 本地为空，跳过同步（保护云端数据）');
+    return;
+  }
   const { data: existingSess } = await sbClient.from('sessions').select('*');
   // local_id → session row
   const sessByLocalId = {};
@@ -1806,6 +1822,11 @@ async function _sbSyncSessions(data){
 
 // ---------- schedules 专用同步 ----------
 async function _sbSyncSchedules(data){
+  // 保护：如果本地数据为空，不要删除云端数据
+  if(!data || data.length === 0){
+    console.log('[Supabase] schedules 本地为空，跳过同步（保护云端数据）');
+    return;
+  }
   const { data: existingSch } = await sbClient.from('schedules').select('*');
   const schByLocalId = {};
   if(existingSch) existingSch.forEach(s => { if(s.local_id !== null) schByLocalId[s.local_id] = s; });
@@ -1860,6 +1881,11 @@ async function _sbSyncSchedules(data){
 
 // ---------- data_overrides 专用同步 ----------
 async function _sbSyncDataOverrides(data){
+  // 保护：如果本地数据为空，不要删除云端数据
+  if(!data || data.length === 0){
+    console.log('[Supabase] data_overrides 本地为空，跳过同步（保护云端数据）');
+    return;
+  }
   // data_overrides 云端结构: {id, target, month, data(jsonb), local_id}
   // 将本地每条记录整体存为 data jsonb
   const { data: existingRows } = await sbClient.from('data_overrides').select('*');
@@ -1896,6 +1922,11 @@ async function _sbSyncDataOverrides(data){
 
 // ---------- ratio_overrides 专用同步 ----------
 async function _sbSyncRatioOverrides(data){
+  // 保护：如果本地数据为空，不要删除云端数据
+  if(!data || data.length === 0){
+    console.log('[Supabase] ratio_overrides 本地为空，跳过同步（保护云端数据）');
+    return;
+  }
   // ratio_overrides 云端结构: {id, script_id, month, ratio, data(jsonb), local_id}
   // 将本地每条记录整体存为 data jsonb
   const empIdMap = await _sbGetEmployeeIdMap();
