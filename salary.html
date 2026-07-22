@@ -1958,7 +1958,7 @@ async function _sbSyncSchedules(data){
       room: sch.room || '',
       session_type: sch.sessionType || '',
       player_count: sch.playerCount || 0,
-      notes: (sch.notes || '') + (sch.status ? ' [status:'+sch.status+']' : '') + (sch.sessionId ? ' [sessionId:'+sch.sessionId+']' : '')
+      notes: (sch.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '') + (sch.status ? ' [status:'+sch.status+']' : '') + (sch.sessionId ? ' [sessionId:'+sch.sessionId+']' : '')
     };
     let cloudSchId = null;
     const existingS = schByLocalId[sch.id];
