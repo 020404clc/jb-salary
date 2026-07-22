@@ -1460,16 +1460,41 @@ async function syncFromSupabase(showToast){
       const { data: sessRows, error: sErr } = await sbClient.from('sessions').select('*');
       const { data: dmRows, error: dErr } = await sbClient.from('session_dm').select('*');
       if(!sErr && !dErr && sessRows){
+        // 获取 profiles UUID→name 映射（用于名字匹配）
+        const { data: profRows } = await sbClient.from('profiles').select('id,name').eq('role','employee');
+        const profNameMap = {};
+        if(profRows) profRows.forEach(p => { profNameMap[p.id] = p.name; });
         const dmMap = {};
         if(dmRows) dmRows.forEach(dm => {
           if(!dmMap[dm.session_id]) dmMap[dm.session_id] = [];
-          const resolvedEmp = empIdReverseMap[dm.employee_id];
-          let dmEmployeeId = resolvedEmp || dm.employee_id;
-          // 如果 empIdReverseMap 返回的是 name（fallback 2），按名字查找本地员工
-          if(resolvedEmp && typeof resolvedEmp === 'string' && isNaN(resolvedEmp)){
-            const localEmp = (DB.getEmployees()||[]).find(e => e.name === resolvedEmp);
+          let dmEmployeeId = null;
+          const notesStr = dm.notes || '';
+          // 方法1：从 notes 提取 DM 名字（推送时编码的 [DM:xxx]）
+          const dmTagMatch = notesStr.match(/\[DM:([^\]]+)\]/);
+          if(dmTagMatch){
+            const dmName = dmTagMatch[1];
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === dmName);
             if(localEmp) dmEmployeeId = localEmp.id;
           }
+          // 方法2 fallback：从 profiles 表查名字，再匹配本地员工
+          if(dmEmployeeId === null && profNameMap[dm.employee_id]){
+            const profName = profNameMap[dm.employee_id];
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === profName);
+            if(localEmp) dmEmployeeId = localEmp.id;
+          }
+          // 方法3 fallback：empIdReverseMap（旧逻辑）
+          if(dmEmployeeId === null){
+            const resolved = empIdReverseMap[dm.employee_id];
+            if(resolved !== undefined && resolved !== null){
+              if(typeof resolved === 'number') dmEmployeeId = resolved;
+              else if(typeof resolved === 'string' && isNaN(resolved)){
+                const localEmp = (DB.getEmployees()||[]).find(e => e.name === resolved);
+                if(localEmp) dmEmployeeId = localEmp.id;
+              } else { dmEmployeeId = resolved; }
+            }
+          }
+          // 最终兜底
+          if(dmEmployeeId === null) dmEmployeeId = dm.employee_id;
           dmMap[dm.session_id].push({
             employeeId: dmEmployeeId,
             effectiveHours: dm.share_ratio,
@@ -1535,16 +1560,46 @@ async function syncFromSupabase(showToast){
       const { data: schRows, error: sErr2 } = await sbClient.from('schedules').select('*');
       const { data: schDmRows, error: sdErr } = await sbClient.from('schedule_dm').select('*');
       if(!sErr2 && !sdErr && schRows){
+        // 获取 profiles UUID→name 映射（如果上面 session_dm 拉取时没获取过）
+        let schProfNameMap = {};
+        if(typeof profNameMap !== 'undefined'){
+          schProfNameMap = profNameMap;
+        } else {
+          const { data: schProfRows } = await sbClient.from('profiles').select('id,name').eq('role','employee');
+          if(schProfRows) schProfRows.forEach(p => { schProfNameMap[p.id] = p.name; });
+        }
         const schDmMap = {};
         if(schDmRows) schDmRows.forEach(sdm => {
           if(!schDmMap[sdm.schedule_id]) schDmMap[sdm.schedule_id] = [];
-          const resolvedSchEmp = empIdReverseMap[sdm.employee_id];
-          let schDmId = resolvedSchEmp || sdm.employee_id;
-          if(resolvedSchEmp && typeof resolvedSchEmp === 'string' && isNaN(resolvedSchEmp)){
-            const localEmp2 = (DB.getEmployees()||[]).find(e => e.name === resolvedSchEmp);
-            if(localEmp2) schDmId = localEmp2.id;
+          let schDmId = null;
+          const sdNotes = sdm.notes || '';
+          const sdTagMatch = sdNotes.match(/\[DM:([^\]]+)\]/);
+          const sdUserNotes = sdNotes.replace(/\[DM:[^\]]+\]/, '').trim();
+          // 方法1：从 notes 提取 DM 名字
+          if(sdTagMatch){
+            const sdName = sdTagMatch[1];
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === sdName);
+            if(localEmp) schDmId = localEmp.id;
           }
-          schDmMap[sdm.schedule_id].push({ dmId: schDmId, notes: sdm.notes || '' });
+          // 方法2 fallback：从 profiles 表查名字
+          if(schDmId === null && schProfNameMap[sdm.employee_id]){
+            const pn = schProfNameMap[sdm.employee_id];
+            const localEmp = (DB.getEmployees()||[]).find(e => e.name === pn);
+            if(localEmp) schDmId = localEmp.id;
+          }
+          // 方法3 fallback：empIdReverseMap
+          if(schDmId === null){
+            const resolvedSchEmp = empIdReverseMap[sdm.employee_id];
+            if(resolvedSchEmp !== undefined && resolvedSchEmp !== null){
+              if(typeof resolvedSchEmp === 'number') schDmId = resolvedSchEmp;
+              else if(typeof resolvedSchEmp === 'string' && isNaN(resolvedSchEmp)){
+                const localEmp2 = (DB.getEmployees()||[]).find(e => e.name === resolvedSchEmp);
+                if(localEmp2) schDmId = localEmp2.id;
+              } else { schDmId = resolvedSchEmp; }
+            }
+          }
+          if(schDmId === null) schDmId = sdm.employee_id;
+          schDmMap[sdm.schedule_id].push({ dmId: schDmId, notes: sdUserNotes });
         });
         const localSchedules = schRows.map(sr => {
           const local = _sbCloudToLocal('schedules', sr);
@@ -2038,13 +2093,15 @@ async function _sbSyncSessions(data){
           console.warn('[Supabase] session_dm跳过：本地员工ID', dm.employeeId, '无法映射到云端UUID，请先确保员工已同步到云端');
           continue;
         }
+        const _dmEmp = (DB.getEmployees()||[]).find(e => empIdMatch(e.id, dm.employeeId));
+        const _dmName = _dmEmp ? _dmEmp.name : '';
         await sbClient.from('session_dm').insert({
           session_id: cloudSessId,
           employee_id: cloudEmpId,
           dm_choice: dm.midnightChoice || 'midnight',
           share_ratio: dm.effectiveHours || 0,
           overtime_fee: dm.overtimeFeePerPerson || 0,
-          notes: ''
+          notes: _dmName ? `[DM:${_dmName}]` : ''
         });
       }
       if(skippedDms === sess.dms.length){
@@ -2130,11 +2187,15 @@ async function _sbSyncSchedules(data){
           console.warn('[Supabase] schedule_dm跳过：本地员工ID', dm.dmId, '无法映射到云端UUID，请先确保员工已同步到云端');
           continue;
         }
+        const _schDmEmp = (DB.getEmployees()||[]).find(e => empIdMatch(e.id, dm.dmId));
+        const _schDmName = _schDmEmp ? _schDmEmp.name : '';
+        const _userNotes = dm.notes || '';
+        const _combinedNotes = _schDmName ? `[DM:${_schDmName}]${_userNotes}` : _userNotes;
         await sbClient.from('schedule_dm').insert({
           schedule_id: cloudSchId,
           employee_id: cloudSchEmpId,
           work_type: '',
-          notes: dm.notes || ''
+          notes: _combinedNotes
         });
       }
       if(skippedSchDms === sch.dms.length){
