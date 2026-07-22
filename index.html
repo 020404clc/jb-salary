@@ -1118,6 +1118,8 @@ let sbClient = null;
 let sbConnected = false;
 let sbSyncInProgress = false;
 let sbSyncQueue = [];
+let sbSelfTriggering = false; // 防止自己推送触发拉取的反馈循环
+let sbSyncDebounceTimer = null; // 去重定时器
 
 // 表名映射：localStorage key -> Supabase 表名
 const SB_TABLE_MAP = {
@@ -1314,12 +1316,16 @@ async function syncFromSupabase(showToast){
     if(showToast) toast('云端未连接');
     return false;
   }
+  if(sbSelfTriggering){
+    console.log('[Supabase] 跳过自触发拉取（防止反馈循环）');
+    return false;
+  }
   if(sbSyncInProgress){
     if(showToast) toast('同步进行中，请稍候...');
     return false;
   }
   sbSyncInProgress = true;
-  showSyncStatus('正在从云端同步...', 'syncing');
+  if(showToast) showSyncStatus('正在从云端同步...', 'syncing');
 
   let successCount = 0;
   let failCount = 0;
@@ -1330,28 +1336,40 @@ async function syncFromSupabase(showToast){
       const { data: profiles, error: pErr } = await sbClient.from('profiles').select('*').eq('role','employee');
       const { data: empRows, error: eErr } = await sbClient.from('employees').select('*');
       if(!pErr && !eErr && profiles && empRows){
-        const profileMap = {};
-        profiles.forEach(p => { profileMap[p.id] = p; });
-        const localEmps = empRows.map(er => {
-          const local = _sbCloudToLocal('employees', er);
-          const profile = profileMap[er.profile_id];
-          if(profile){
-            local.name = profile.name;
-            local.phone = profile.phone || '';
-            local.password = profile.password || '';
-          }
-          if(local.workType) local.workType = normalizeWorkType(local.workType);
-          // 还原 accommodationStatus（优先用 accommodation_status 文本列，否则从 boolean 列推断）
-          if(er.accommodation_status){
-            local.accommodationStatus = er.accommodation_status;
-          } else {
-            local.accommodationStatus = er.accommodation ? 'free' : 'none';
-          }
-          delete local.accommodation;
-          return local;
-        }).filter(e => e.name); // 只保留有 name 的
-        localStorage.setItem('jb2_employees', JSON.stringify(localEmps));
-        successCount++;
+        // 只有云端有数据时才覆盖本地（防止空云端覆盖本地演示数据）
+        if(empRows.length > 0){
+          const profileMap = {};
+          profiles.forEach(p => { profileMap[p.id] = p; });
+          const seenNames = new Set();
+          const localEmps = empRows.map(er => {
+            const local = _sbCloudToLocal('employees', er);
+            const profile = profileMap[er.profile_id];
+            if(profile){
+              local.name = profile.name;
+              local.phone = profile.phone || '';
+              local.password = profile.password || '';
+            }
+            if(local.workType) local.workType = normalizeWorkType(local.workType);
+            // 还原 accommodationStatus（优先用 accommodation_status 文本列，否则从 boolean 列推断）
+            if(er.accommodation_status){
+              local.accommodationStatus = er.accommodation_status;
+            } else {
+              local.accommodationStatus = er.accommodation ? 'free' : 'none';
+            }
+            delete local.accommodation;
+            return local;
+          }).filter(e => {
+            if(!e.name) return false;
+            // 按名字去重：保留第一个出现的
+            if(seenNames.has(e.name)) return false;
+            seenNames.add(e.name);
+            return true;
+          });
+          localStorage.setItem('jb2_employees', JSON.stringify(localEmps));
+          successCount++;
+        } else {
+          console.log('[Supabase] 云端 employees 为空，保留本地数据');
+        }
       } else {
         if(pErr && pErr.code !== '42P01') failCount++;
         if(eErr && eErr.code !== '42P01') failCount++;
@@ -1573,6 +1591,7 @@ async function _sbSyncToSupabase(localKey, data){
     sbSyncQueue.push({ table: localKey, data });
     return;
   }
+  sbSelfTriggering = true; // 标记自触发，防止实时订阅拉取形成反馈循环
 
   try {
     // ===== employees：拆分到 profiles + employees =====
@@ -1675,6 +1694,9 @@ async function _sbSyncToSupabase(localKey, data){
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
   } catch(e){
     console.warn('[Supabase] 同步', localKey, '异常:', e);
+  } finally {
+    // 延迟清除自触发标记，等实时订阅的回调窗口过去后再允许拉取
+    setTimeout(()=>{ sbSelfTriggering = false; }, 2000);
   }
 }
 
@@ -2005,7 +2027,13 @@ function subscribeToSupabaseChanges(){
       { event: '*', schema: 'public', table: tableName },
       (payload) => {
         console.log('[Supabase] 实时变更:', tableName, payload.eventType);
-        syncFromSupabase(false);
+        // 去重：延迟3秒再拉取，合并短时间内的多次变更
+        clearTimeout(sbSyncDebounceTimer);
+        sbSyncDebounceTimer = setTimeout(()=>{
+          if(!sbSelfTriggering){
+            syncFromSupabase(false);
+          }
+        }, 3000);
       }
     );
   });
@@ -5165,12 +5193,15 @@ let empSchSelectedDate='';
 async function renderEmpSelect(){
   const select=document.getElementById('empSelect');
   select.innerHTML='<option value="">请选择</option>';
-  // 优先从 profiles 表加载
+  // 优先从 profiles 表加载（按名字去重）
   if(sbClient){
     try{
       const{data:profiles}=await sbClient.from('profiles').select('*').eq('role','employee');
       if(profiles&&profiles.length){
+        const seenNames=new Set();
         profiles.forEach(p=>{
+          if(seenNames.has(p.name))return;
+          seenNames.add(p.name);
           const opt=document.createElement('option');
           opt.value='profile_'+p.id;
           opt.textContent=p.name;
@@ -5209,6 +5240,11 @@ async function empLogin(){
       if(empRec){
         employeeId=empRec.id;
         emp=empById(empRec.id);
+        // 回退：如果云端UUID匹配不到本地员工，按名字查找（同步未完成时）
+        if(!emp){
+          emp=DB.getEmployees().find(e=>e.name===profile.name);
+          if(emp) employeeId=emp.id;
+        }
         if(!pwdMatch&&emp){
           // 回退验证：用 employees 表的密码
           if(emp.password&&pwd===emp.password)pwdMatch=true;
@@ -5809,34 +5845,35 @@ function migrateSchedules(){
 // ========================================
 function initDemoData(){
   if(DB.getEmployees().length)return;
-  DB.saveEmployees([
+  // 直接用 localStorage.setItem，不触发 DB._s 的自动推送（避免演示数据污染云端）
+  localStorage.setItem('jb2_employees',JSON.stringify([
     {id:1,name:'小明',phone:'13800001111',password:'1111',workType:'full_time_no_base',guaranteeLevel:5,hireMonth:'2026-04',assessmentPercent:5,accommodationStatus:'free'},
     {id:2,name:'阿杰',phone:'13800002222',password:'2222',workType:'full_time_guaranteed',guaranteeLevel:7,hireMonth:'2026-03',assessmentPercent:0,accommodationStatus:'subsidy'},
     {id:3,name:'小雨',phone:'13800003333',password:'3333',workType:'semi_full_time',guaranteeLevel:5,hireMonth:'',assessmentPercent:3,accommodationStatus:'none'},
     {id:4,name:'晓雯',phone:'13800004444',password:'4444',workType:'part_time',guaranteeLevel:5,hireMonth:'',assessmentPercent:0,accommodationStatus:'none'}
-  ]);
-  DB.saveScripts([
+  ]));
+  localStorage.setItem('jb2_scripts',JSON.stringify([
     {id:1,name:'北国之春',standardHours:5,durationFrom:4,durationTo:6},
     {id:2,name:'年轮',standardHours:6,durationFrom:5,durationTo:8},
     {id:3,name:'古木吟',standardHours:4,durationFrom:3.5,durationTo:5},
     {id:4,name:'汐海镇',standardHours:7,durationFrom:6,durationTo:9},
     {id:5,name:'漓川怪谈',standardHours:5,durationFrom:4,durationTo:7}
-  ]);
+  ]));
   const today=todayStr();
   const yesterday=new Date(Date.now()-86400000).toISOString().split('T')[0];
-  DB.saveSessions([
+  localStorage.setItem('jb2_sessions',JSON.stringify([
     {id:1,scriptId:1,date:today,startTime:'14:00',endTime:'18:30',room:'A1',playerCount:6,unitPrice:128,actualAmount:768,deductionAmount:0,chargeAmount:0,costumeId:'',notes:'',dms:[{employeeId:1,effectiveHours:4.5,midnightChoice:'midnight',overtimeFeePerPerson:0}]},
     {id:2,scriptId:2,date:today,startTime:'19:00',endTime:'23:30',room:'A2',playerCount:5,unitPrice:158,actualAmount:790,deductionAmount:0,chargeAmount:500,costumeId:'C3',notes:'',dms:[{employeeId:2,effectiveHours:4.5,midnightChoice:'time_diff',overtimeFeePerPerson:0},{employeeId:3,effectiveHours:2,midnightChoice:'midnight',overtimeFeePerPerson:0}]},
     {id:3,scriptId:3,date:yesterday,startTime:'14:00',endTime:'17:30',room:'B1',playerCount:6,unitPrice:108,actualAmount:648,deductionAmount:0,chargeAmount:0,costumeId:'',notes:'',dms:[{employeeId:4,effectiveHours:3.5,midnightChoice:'midnight',overtimeFeePerPerson:0}]},
     {id:4,scriptId:4,date:yesterday,startTime:'20:00',endTime:'01:30',room:'A1',playerCount:7,unitPrice:168,actualAmount:1176,deductionAmount:0,chargeAmount:2000,costumeId:'C5',notes:'修仙场',dms:[{employeeId:1,effectiveHours:5.5,midnightChoice:'midnight',overtimeFeePerPerson:30}]}
-  ]);
+  ]));
 
   // Demo schedules
   const tomorrow=new Date(Date.now()+86400000).toISOString().split('T')[0];
-  DB.saveSchedules([
+  localStorage.setItem('jb2_schedules',JSON.stringify([
     {id:1,dms:[{dmId:1,notes:''}],scriptId:1,date:tomorrow,expectedTime:'14:00',playerCount:6,status:'planned',sessionId:null,notes:''},
     {id:2,dms:[{dmId:2,notes:''},{dmId:3,notes:'协助'}],scriptId:2,date:tomorrow,expectedTime:'19:00',playerCount:5,status:'planned',sessionId:null,notes:'周末场'}
-  ]);
+  ]));
 }
 
 // ========================================
