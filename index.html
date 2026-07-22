@@ -1418,7 +1418,10 @@ async function syncFromSupabase(showToast){
           delete local.deducted_card_phone; delete local.created_by;
           return local;
         });
-        localStorage.setItem('jb2_sessions', JSON.stringify(localSessions));
+        // 只有云端有数据时才覆盖本地
+        if(localSessions.length > 0){
+          localStorage.setItem('jb2_sessions', JSON.stringify(localSessions));
+        }
         successCount++;
       } else {
         if(sErr && sErr.code !== '42P01') failCount++;
@@ -1455,7 +1458,10 @@ async function syncFromSupabase(showToast){
           delete local.player_count; delete local.session_type;
           return local;
         });
-        localStorage.setItem('jb2_schedules', JSON.stringify(localSchedules));
+        // 只有云端有数据时才覆盖本地
+        if(localSchedules.length > 0){
+          localStorage.setItem('jb2_schedules', JSON.stringify(localSchedules));
+        }
         successCount++;
       } else {
         if(sErr2 && sErr2.code !== '42P01') failCount++;
@@ -1537,11 +1543,17 @@ async function syncFromSupabase(showToast){
                 mergedData.push(local);
               }
             });
-            localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
+            // 只有云端有数据时才覆盖本地
+            if(mergedData.length > 0){
+              localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
+            }
             successCount++;
             continue;
           }
-          localStorage.setItem('jb2_' + localKey, JSON.stringify(localData));
+          // 只有云端有数据时才覆盖本地（防止空云端清空本地数据）
+          if(localData.length > 0){
+            localStorage.setItem('jb2_' + localKey, JSON.stringify(localData));
+          }
           successCount++;
         }
       } catch(e){
