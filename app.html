@@ -1119,6 +1119,7 @@ let sbConnected = false;
 let sbSyncInProgress = false;
 let sbSyncQueue = [];
 let sbSelfTriggering = false; // 防止自己推送触发拉取的反馈循环
+let sbDirtyTables = new Set(); // 记录本地刚保存、尚未确认上传完成的表
 let sbSyncDebounceTimer = null; // 去重定时器
 
 // 表名映射：localStorage key -> Supabase 表名
@@ -1376,7 +1377,7 @@ async function syncFromSupabase(showToast){
       const { data: empRows, error: eErr } = await sbClient.from('employees').select('*');
       if(!pErr && !eErr && profiles && empRows){
         // 只有云端有数据时才覆盖本地（防止空云端覆盖本地演示数据）
-        if(empRows.length > 0){
+        if(empRows.length > 0 && !sbDirtyTables.has('employees')){
           const profileMap = {};
           profiles.forEach(p => { profileMap[p.id] = p; });
           // 建立 name → 本地 ID 映射（用于复用已有本地 ID）
@@ -1422,6 +1423,9 @@ async function syncFromSupabase(showToast){
           });
           localStorage.setItem('jb2_employees', JSON.stringify(localEmps));
           successCount++;
+        } else if(sbDirtyTables.has('employees')){
+          console.log('[Supabase] 跳过脏表 employees');
+          successCount++;
         } else {
           // 云端为空时保留本地数据（防止数据丢失）
           console.log('[Supabase] 云端 employees 为空，保留本地数据');
@@ -1436,6 +1440,7 @@ async function syncFromSupabase(showToast){
     // --- 2. 同步 sessions（合并 sessions + session_dm）---
     // 先获取FK反向映射
     const empIdReverseMap = await _sbGetEmployeeIdReverseMap();
+    // 注意：sessions 和 schedules 的脏表检查在后面合并时处理
     const scriptIdReverseMap = await _sbGetScriptIdReverseMap();
     try {
       const { data: sessRows, error: sErr } = await sbClient.from('sessions').select('*');
@@ -1478,12 +1483,17 @@ async function syncFromSupabase(showToast){
         // 去重：按local_id去重，防止云端重复记录
         const _sessSeen = new Set();
         const _sessDeduped = localSessions.filter(s => { if(s.id === undefined || s.id === null) return true; if(_sessSeen.has(s.id)) return false; _sessSeen.add(s.id); return true; });
-        // 合并策略：云端数据优先，保留本地未同步的场次
+        // 合并策略：如果sessions是脏表，完全保留本地数据
         const existingLocalSess = JSON.parse(localStorage.getItem('jb2_sessions') || '[]');
+        if(sbDirtyTables.has('sessions')){
+          console.log('[Supabase] 跳过脏表 sessions');
+          // 不覆盖本地数据
+        } else {
         const sessCloudIds = new Set(_sessDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
         const sessLocalOnly = existingLocalSess.filter(s => s.id !== undefined && s.id !== null && !sessCloudIds.has(s.id));
         const mergedSess = _sessDeduped.concat(sessLocalOnly);
         localStorage.setItem('jb2_sessions', JSON.stringify(mergedSess));
+        }
         successCount++;
       } else {
         if(sErr && sErr.code !== '42P01') failCount++;
@@ -1523,12 +1533,17 @@ async function syncFromSupabase(showToast){
         // 去重：按local_id去重，防止云端重复记录
         const _schSeen = new Set();
         const _schDeduped = localSchedules.filter(s => { if(s.id === undefined || s.id === null) return true; if(_schSeen.has(s.id)) return false; _schSeen.add(s.id); return true; });
-        // 合并策略：云端数据优先，但保留本地未同步的排班（防止数据丢失）
+        // 合并策略：如果schedules是脏表，完全保留本地数据
         const existingLocalSch = JSON.parse(localStorage.getItem('jb2_schedules') || '[]');
+        if(sbDirtyTables.has('schedules')){
+          console.log('[Supabase] 跳过脏表 schedules');
+          // 不覆盖本地数据
+        } else {
         const schCloudIds = new Set(_schDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
         const schLocalOnly = existingLocalSch.filter(s => s.id !== undefined && s.id !== null && !schCloudIds.has(s.id));
         const mergedSch = _schDeduped.concat(schLocalOnly);
         localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').trim()}))));
+        }
         successCount++;
       } else {
         if(sErr2 && sErr2.code !== '42P01') failCount++;
@@ -1539,6 +1554,11 @@ async function syncFromSupabase(showToast){
     const simpleTables = ['scripts','attendance','td_exchanges','td_consumption','td_adjustments','ratio_overrides','data_overrides','recharges'];
     for(const localKey of simpleTables){
       const tableName = SB_TABLE_MAP[localKey];
+      // 跳过脏表（本地刚保存，上传可能还没完成，不能覆盖）
+      if(sbDirtyTables.has(localKey)){
+        console.log('[Supabase] 跳过脏表:', localKey, '(本地有未确认的修改)');
+        continue;
+      }
       try {
         const { data, error } = await sbClient.from(tableName).select('*');
         if(error){
@@ -1674,6 +1694,7 @@ async function syncFromSupabase(showToast){
     return true;
   } finally {
     sbSyncInProgress = false;
+    sbDirtyTables.delete(localKey); // 上传完成，清除脏标记
     if(sbSyncQueue.length > 0){
       const queue = [...sbSyncQueue];
       sbSyncQueue = [];
@@ -2103,6 +2124,7 @@ async function _sbSyncAdminPwd(pwd){
       const originalSave = DB[saveMethodName].bind(DB);
       DB[saveMethodName] = function(data){
         originalSave(data);
+        sbDirtyTables.add(localKey); // 标记为脏表
         _sbSyncToSupabase(localKey, data);
       };
     }
