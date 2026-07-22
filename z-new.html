@@ -1072,11 +1072,7 @@ const DB={
   _g(k){return JSON.parse(localStorage.getItem('jb2_'+k)||'[]');},
   _s(k,v){
     localStorage.setItem('jb2_'+k,JSON.stringify(v));
-    // 自动推送到云端（仅对有云端映射的表）
-    if(typeof SB_TABLE_MAP!=='undefined' && SB_TABLE_MAP[k] && typeof _sbSyncToSupabase==='function'){
-      clearTimeout(this._syncTimer);
-      this._syncTimer = setTimeout(()=>{ _sbSyncToSupabase(k, v); }, 500);
-    }
+    // 同步由 wrapDBSaveMethods 统一处理，不再在此 debounce
   },
   getEmployees(){return this._g('employees').map(e=>{if(e.workType)e.workType=normalizeWorkType(e.workType);return e;});},
   saveEmployees(v){this._s('employees',v.map(e=>{if(e.workType)e.workType=normalizeWorkType(e.workType);return e;}));},
@@ -1142,7 +1138,7 @@ const SB_TABLE_MAP = {
 const SB_FIELD_MAP = {
   employees: { workType:'work_type', guaranteeLevel:'guarantee_level', hireMonth:'hire_month', assessmentPercent:'assess_percent', accommodationStatus:'accommodation' },
   scripts: { standardHours:'standard_hours', durationFrom:'duration_from', durationTo:'duration_to' },
-  sessions: { scriptId:'script_id', startTime:'start_time', endTime:'end_time', startDate:'start_date', playerCount:'players', unitPrice:'price', actualAmount:'actual_amount', deductionAmount:'deduction_amount', deductedCardPhone:'deducted_card_phone', chargeAmount:'costume', costumeId:'costume', createdBy:'created_by' },
+  sessions: { scriptId:'script_id', startTime:'start_time', endTime:'end_time', startDate:'start_date', playerCount:'players', unitPrice:'price', actualAmount:'actual_amount', deductionAmount:'deduction_amount', deductedCardPhone:'deducted_card_phone', chargeAmount:'costume', createdBy:'created_by' },
   attendance: { employeeId:'employee_id', makeupRefunded:'makeup_refunded' },
   td_exchanges: { employeeId:'employee_id' },
   td_consumption: { employeeId:'employee_id' },
@@ -1184,9 +1180,10 @@ function _sbLocalToCloud(localKey, localRow){
       if(localKey === 'schedules' && k === 'dms') continue;
       // employees 表的 name/phone/password 存到 profiles 表
       if(localKey === 'employees' && (k === 'name' || k === 'phone' || k === 'password')) continue;
-      // chargeAmount 映射为 costume（已在上面的 map 中），costumeId 映射为 costume（已映射）
-      // 但我们还需要处理 chargeEntries 等不需要存的字段
-      if(k === 'chargeEntries' || k === 'chargeAmount') continue;
+      // chargeAmount 映射为 costume（已在上面的 map 中），costumeId 编码到 notes
+      // chargeEntries 不需要存到云端
+      if(k === 'chargeEntries') continue;
+      if(localKey === 'sessions' && k === 'costumeId') continue; // costumeId encoded in notes
       // status / sessionId for schedules: 存为 notes 的一部分或者跳过
       if(localKey === 'schedules' && (k === 'status' || k === 'sessionId')) continue;
       cloud[k] = v;
@@ -1233,19 +1230,13 @@ function _sbCloudToLocal(localKey, cloudRow){
 
 // 获取本地员工ID → 云端UUID的映射（用于FK引用）
 async function _sbGetEmployeeIdMap(){
-  // 用 name 匹配代替 local_id（云端表没有 local_id 列）
-  const { data: empRows } = await sbClient.from('employees').select('id,profile_id');
-  const { data: profiles } = await sbClient.from('profiles').select('id,name').eq('role','employee');
+  // 用 local_id 匹配（云端 employees 表有 local_id 列）
+  const { data: empRows } = await sbClient.from('employees').select('id,local_id');
   const map = {};
-  if(empRows && profiles){
-    const profById = {};
-    profiles.forEach(p => { profById[p.id] = p; });
-    const localEmps = DB.getEmployees();
+  if(empRows){
     empRows.forEach(e => {
-      const prof = profById[e.profile_id];
-      if(prof){
-        const localEmp = localEmps.find(le => le.name === prof.name);
-        if(localEmp) map[localEmp.id] = e.id;
+      if(e.local_id !== null && e.local_id !== undefined){
+        map[e.local_id] = e.id;
       }
     });
   }
@@ -1254,19 +1245,13 @@ async function _sbGetEmployeeIdMap(){
 
 // 获取云端UUID → 本地员工ID的映射（用于反向还原）
 async function _sbGetEmployeeIdReverseMap(){
-  // 用 name 匹配代替 local_id
-  const { data: empRows } = await sbClient.from('employees').select('id,profile_id');
-  const { data: profiles } = await sbClient.from('profiles').select('id,name').eq('role','employee');
+  // 用 local_id 匹配
+  const { data: empRows } = await sbClient.from('employees').select('id,local_id');
   const map = {};
-  if(empRows && profiles){
-    const profById = {};
-    profiles.forEach(p => { profById[p.id] = p; });
-    const localEmps = DB.getEmployees();
+  if(empRows){
     empRows.forEach(e => {
-      const prof = profById[e.profile_id];
-      if(prof){
-        const localEmp = localEmps.find(le => le.name === prof.name);
-        if(localEmp) map[e.id] = localEmp.id;
+      if(e.local_id !== null && e.local_id !== undefined){
+        map[e.id] = e.local_id;
       }
     });
   }
@@ -1291,19 +1276,13 @@ async function _sbGetScriptIdReverseMap(){
 
 // 获取本地profile(员工)ID → 云端profile UUID的映射（用于created_by等）
 async function _sbGetProfileIdMap(){
-  // 用 name 匹配代替 local_id
-  const { data: empRows } = await sbClient.from('employees').select('id,profile_id');
-  const { data: profiles } = await sbClient.from('profiles').select('id,name').eq('role','employee');
+  // 用 local_id 匹配（通过 employees 表）
+  const { data: empRows } = await sbClient.from('employees').select('id,local_id,profile_id');
   const map = {};
-  if(empRows && profiles){
-    const profById = {};
-    profiles.forEach(p => { profById[p.id] = p; });
-    const localEmps = DB.getEmployees();
+  if(empRows){
     empRows.forEach(e => {
-      const prof = profById[e.profile_id];
-      if(prof){
-        const localEmp = localEmps.find(le => le.name === prof.name);
-        if(localEmp) map[localEmp.id] = e.profile_id;
+      if(e.local_id !== null && e.local_id !== undefined){
+        map[e.local_id] = e.profile_id;
       }
     });
   }
@@ -1380,10 +1359,7 @@ async function syncFromSupabase(showToast){
         if(empRows.length > 0 && !sbDirtyTables.has('employees')){
           const profileMap = {};
           profiles.forEach(p => { profileMap[p.id] = p; });
-          // 建立 name → 本地 ID 映射（用于复用已有本地 ID）
           const existingLocalEmps = DB.getEmployees();
-          const localIdByName = {};
-          existingLocalEmps.forEach(e => { localIdByName[e.name] = e.id; });
           const seenNames = new Set();
           const localEmps = empRows.map(er => {
             const local = _sbCloudToLocal('employees', er);
@@ -1393,18 +1369,21 @@ async function syncFromSupabase(showToast){
               local.phone = profile.phone || '';
               local.password = profile.password || '';
             }
-            // 用 name 匹配本地 ID（云端没有 local_id 列）
-            if(local.name && localIdByName[local.name] !== undefined){
-              local.id = localIdByName[local.name];
+            // 用 local_id 匹配本地 ID
+            if(er.local_id !== null && er.local_id !== undefined){
+              local.id = er.local_id;
             } else if(local.name){
-              // 新员工，分配新本地 ID
-              const maxId = existingLocalEmps.length ? Math.max(...existingLocalEmps.map(e => e.id)) : 0;
-              local.id = maxId + Object.keys(localIdByName).length + 1;
-              localIdByName[local.name] = local.id;
+              // fallback: 用 name 匹配（兼容旧数据）
+              const matched = existingLocalEmps.find(e => e.name === local.name);
+              if(matched) local.id = matched.id;
+              else {
+                const maxId = existingLocalEmps.length ? Math.max(...existingLocalEmps.map(e => e.id)) : 0;
+                local.id = maxId + 1;
+              }
             }
             if(local.workType) local.workType = normalizeWorkType(local.workType);
-            // 从 accommodation 布尔值还原 accommodationStatus
-            local.accommodationStatus = er.accommodation ? 'free' : 'none';
+            // 从 local_uuid 还原 accommodationStatus（优先），否则从 accommodation 布尔值还原
+            local.accommodationStatus = er.local_uuid || (er.accommodation ? 'free' : 'none');
             delete local.accommodation;
             // 清理 _sbCloudToLocal 残留的 snake_case 字段（本地用 camelCase）
             delete local.hire_month;
@@ -1421,7 +1400,11 @@ async function syncFromSupabase(showToast){
             seenNames.add(e.name);
             return true;
           });
-          localStorage.setItem('jb2_employees', JSON.stringify(localEmps));
+          // 合并策略：云端数据优先，保留本地未同步的记录
+          const cloudLocalIds = new Set(localEmps.filter(e => e.id !== undefined).map(e => e.id));
+          const localOnly = existingLocalEmps.filter(e => e.id !== undefined && !cloudLocalIds.has(e.id));
+          const mergedEmps = localEmps.concat(localOnly);
+          localStorage.setItem('jb2_employees', JSON.stringify(mergedEmps));
           successCount++;
         } else if(sbDirtyTables.has('employees')){
           console.log('[Supabase] 跳过脏表 employees');
@@ -1468,10 +1451,14 @@ async function syncFromSupabase(showToast){
           local.actualAmount = sr.actual_amount;
           local.deductionAmount = sr.deduction_amount;
           local.deductedCardPhone = sr.deducted_card_phone || '';
-          local.costumeId = sr.costume || '';
-          local.chargeAmount = 0;
+          local.chargeAmount = sr.costume || 0;
+          local.costumeId = '';
+          if(sr.notes){
+            const costumeMatch = sr.notes.match(/\[costumeId:([^\]]+)\]/);
+            if(costumeMatch) local.costumeId = costumeMatch[1];
+          }
           local.chargeEntries = [];
-          local.notes = sr.notes || '';
+          local.notes = (sr.notes || '').replace(/\s*\[costumeId:[^\]]*\]/g, '').trim();
           local.createdBy = empIdReverseMap[sr.created_by] || sr.created_by;
           local.dms = dmMap[sr.id] || [];
           delete local.script_id; delete local.start_time; delete local.end_time;
@@ -1574,6 +1561,15 @@ async function syncFromSupabase(showToast){
             localData.forEach(r => {
               r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId;
               r.makeupRefunded = r.makeup_refunded !== undefined ? r.makeup_refunded : r.makeupRefunded;
+              // 从 note 解析 isMakeup 和 attStatus
+              if(r.note){
+                const isMakeupMatch = r.note.match(/\[isMakeup:([^\]]+)\]/);
+                if(isMakeupMatch) r.isMakeup = isMakeupMatch[1] === 'true';
+                const attStatusMatch = r.note.match(/\[attStatus:([^\]]+)\]/);
+                if(attStatusMatch) r.attStatus = attStatusMatch[1];
+                // 清理 note 中的标记
+                r.note = r.note.replace(/\s*\[isMakeup:[^\]]*\]/g, '').replace(/\s*\[attStatus:[^\]]*\]/g, '').trim();
+              }
               delete r.employee_id; delete r.makeup_refunded;
             });
           }
@@ -1786,6 +1782,15 @@ async function _sbSyncToSupabase(localKey, data){
         if(empIdMap && cloudRow.employee_id !== undefined && cloudRow.employee_id !== null){
           cloudRow.employee_id = empIdMap[cloudRow.employee_id] || null;
         }
+        // attendance: encode isMakeup/attStatus into note field
+        if(localKey === 'attendance'){
+          cloudRow.note = (cloudRow.note || '')
+            .replace(/\s*\[isMakeup:[^\]]*\]/g, '')
+            .replace(/\s*\[attStatus:[^\]]*\]/g, '');
+          if(row.isMakeup) cloudRow.note += ' [isMakeup:true]';
+          if(row.attStatus) cloudRow.note += ' [attStatus:'+row.attStatus+']';
+          cloudRow.note = cloudRow.note.trim();
+        }
         if(localKey === 'recharges' && cloudRow.dm_id !== undefined && cloudRow.dm_id !== null){
           cloudRow.dm_id = empIdMap[cloudRow.dm_id] || null;
         }
@@ -1822,19 +1827,16 @@ async function _sbSyncEmployees(data){
   // 建立 name → profile 的映射
   const profileByName = {};
   if(existingProfiles) existingProfiles.forEach(p => { profileByName[p.name] = p; });
-  // 建立 profile_id → employee row 的映射（用 profile_id 代替 local_id）
-  const empByProfileId = {};
-  if(existingEmpRows) existingEmpRows.forEach(e => { if(e.profile_id) empByProfileId[e.profile_id] = e; });
+  // 建立 local_id → employee row 的映射
+  const empByLocalId = {};
+  if(existingEmpRows) existingEmpRows.forEach(e => { if(e.local_id !== null && e.local_id !== undefined) empByLocalId[e.local_id] = e; });
 
-  // 建立本地员工名字集合
-  const localNames = new Set((data || []).map(d => d.name));
-  // 删除本地已不存在的 employees（通过 profile name 匹配）
-  if(existingEmpRows && existingProfiles){
+  // 用 local_id 匹配删除逻辑
+  const localIds = new Set((data || []).map(d => d.id));
+  if(existingEmpRows){
     for(const cloudEmp of existingEmpRows){
-      const cloudProfile = existingProfiles.find(p => p.id === cloudEmp.profile_id);
-      if(cloudProfile && !localNames.has(cloudProfile.name)){
+      if(cloudEmp.local_id !== null && cloudEmp.local_id !== undefined && !localIds.has(cloudEmp.local_id)){
         await sbClient.from('employees').delete().eq('id', cloudEmp.id);
-        // 也删除对应的 profile
         await sbClient.from('profiles').delete().eq('id', cloudEmp.profile_id);
       }
     }
@@ -1857,13 +1859,15 @@ async function _sbSyncEmployees(data){
     // 2. upsert employee（不使用 local_id 和 accommodation_status）
     const empCloud = {
       profile_id: profileId,
+      local_id: emp.id,
       work_type: normalizeWorkType(emp.workType),
       guarantee_level: emp.guaranteeLevel || 0,
       hire_month: emp.hireMonth || '',
       assess_percent: emp.assessmentPercent || 0,
-      accommodation: emp.accommodationStatus === 'free'
+      accommodation: emp.accommodationStatus === 'free',
+      local_uuid: emp.accommodationStatus || 'none'
     };
-    const existingEmp = profileId ? empByProfileId[profileId] : null;
+    const existingEmp = empByLocalId[emp.id] || (profileId ? (existingEmpRows || []).find(e => e.profile_id === profileId && (e.local_id === null || e.local_id === undefined)) : null);
     if(existingEmp){
       await sbClient.from('employees').update(empCloud).eq('id', existingEmp.id);
     } else {
@@ -1923,8 +1927,9 @@ async function _sbSyncSessions(data){
       actual_amount: sess.actualAmount || 0,
       deduction_amount: sess.deductionAmount || 0,
       deducted_card_phone: sess.deductedCardPhone || '',
-      costume: sess.costumeId || '',
-      notes: sess.notes || '',
+      costume: sess.chargeAmount || 0,
+      notes: (sess.notes || '').replace(/\s*\[costumeId:[^\]]*\]/g, '')
+        + (sess.costumeId ? ' [costumeId:'+sess.costumeId+']' : ''),
       created_by: profileIdMap[sess.createdBy] || null
     };
     let cloudSessId = null;
@@ -1956,11 +1961,16 @@ async function _sbSyncSessions(data){
 }
 
 // ---------- schedules 专用同步 ----------
+let sbLastEmployeeSync = 0;
 async function _sbSyncSchedules(data){
-  // 确保员工已同步到云端（否则DM ID映射会失败）
-  const localEmployees = DB.getEmployees();
-  if(localEmployees && localEmployees.length > 0){
-    await _sbSyncEmployees(localEmployees);
+  // 确保员工已同步到云端（否则DM ID映射会失败），5分钟缓存
+  const now = Date.now();
+  if(now - sbLastEmployeeSync > 300000){
+    const localEmployees = DB.getEmployees();
+    if(localEmployees && localEmployees.length > 0){
+      await _sbSyncEmployees(localEmployees);
+      sbLastEmployeeSync = now;
+    }
   }
   
   const { data: existingSch } = await sbClient.from('schedules').select('*');
@@ -2044,13 +2054,18 @@ async function _sbSyncDataOverrides(data){
     for(const del of toDelete) await sbClient.from('data_overrides').delete().eq('id', del.id);
   }
 
+  const empIdMap = await _sbGetEmployeeIdMap();
+  const scriptIdMap = await _sbGetScriptIdMap();
   for(const row of (data || [])){
     // 提取关键字段用于 target/month
-    const target = 'employee_' + (row.employeeId || row.employee_id || 0);
+    const target = 'employee_' + (empIdMap[row.employeeId] || row.employeeId || row.employee_id || 0);
     const month = row.overrideMonth || row.month || '';
     // 整条记录存入 data jsonb
     const cleanData = { ...row };
     delete cleanData.id; // id 存到 local_id
+    // 转换FK引用为云端UUID
+    if(cleanData.employeeId) cleanData.employeeId = empIdMap[cleanData.employeeId] || cleanData.employeeId;
+    if(cleanData.scriptId) cleanData.scriptId = scriptIdMap[cleanData.scriptId] || cleanData.scriptId;
     const cloudRow = {
       local_id: row.id,
       target: target,
@@ -2086,6 +2101,9 @@ async function _sbSyncRatioOverrides(data){
     const month = row.overrideMonth || row.month || '';
     const cleanData = { ...row };
     delete cleanData.id;
+    // 转换FK引用为云端UUID
+    if(cleanData.employeeId) cleanData.employeeId = empIdMap[cleanData.employeeId] || cleanData.employeeId;
+    if(cleanData.scriptId) cleanData.scriptId = scriptIdMap[cleanData.scriptId] || cleanData.scriptId;
     const cloudRow = {
       local_id: row.id,
       script_id: scriptIdMap[row.scriptId] || null,
@@ -2794,7 +2812,7 @@ function renderSessionTable(){
         <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡: ¥'+s.deductionAmount+' (尾号'+(s.deductedCardPhone||'?')+')':''}</div>
         <div>服装: ${s.costumeId||'-'}</div>
         <div>DM详情: ${s.dms.map(d=>empName(d.employeeId)+'('+d.effectiveHours+'h, 加时¥'+(d.overtimeFeePerPerson||0)+'/人)').join(', ')}</div>
-        ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim())+'</div>':''}
+        ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').replace(/\s*\[costumeId:[^\]]*\]/g,'').trim())+'</div>':''}
         <div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-info btn-sm" onclick="event.stopPropagation();editSession(${s.id})" style="font-size:10px;padding:3px 10px">编辑</button><button class="btn btn-sm" onclick="event.stopPropagation();deleteSession(${s.id})" style="font-size:10px;padding:3px 10px;background:var(--accent);color:#fff">删除</button></div>
       </div>
     </div>`;
@@ -5571,7 +5589,7 @@ function renderEmpSessions(){
         <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡: ¥'+s.deductionAmount+' (尾号'+(s.deductedCardPhone||'?')+')':''}</div>
         <div>加时费/人: &yen;${dm?.overtimeFeePerPerson||0}</div>
         <div>DM: ${s.dms.map(d=>empName(d.employeeId)+'('+d.effectiveHours+'h)').join(', ')}</div>
-        ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim())+'</div>':''}
+        ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').replace(/\s*\[costumeId:[^\]]*\]/g,'').trim())+'</div>':''}
       </div>
     </div>`;
   }).join('');
@@ -6404,7 +6422,7 @@ function saveRecharge(){
   if(!phone||phone.length<1){toast('请输入手机号后六位');return;}
   if(isNaN(amount)||amount<=0){toast('请输入有效的充值金额');return;}
   const recharges=DB.getRecharges();
-  recharges.push({id:Date.now(),dmId,phone,amount,date,note});
+  recharges.push({id:nextId(recharges),dmId,phone,amount,date,note});
   DB.saveRecharges(recharges);
   closeModal('rechargeModal');
   toast('充值记录已保存');
