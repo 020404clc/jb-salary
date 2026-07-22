@@ -1528,7 +1528,7 @@ async function syncFromSupabase(showToast){
         const schCloudIds = new Set(_schDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
         const schLocalOnly = existingLocalSch.filter(s => s.id !== undefined && s.id !== null && !schCloudIds.has(s.id));
         const mergedSch = _schDeduped.concat(schLocalOnly);
-        localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch));
+        localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').trim()}))));
         successCount++;
       } else {
         if(sErr2 && sErr2.code !== '42P01') failCount++;
