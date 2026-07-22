@@ -1936,6 +1936,12 @@ async function _sbSyncSessions(data){
 
 // ---------- schedules 专用同步 ----------
 async function _sbSyncSchedules(data){
+  // 确保员工已同步到云端（否则DM ID映射会失败）
+  const localEmployees = DB.getEmployees();
+  if(localEmployees && localEmployees.length > 0){
+    await _sbSyncEmployees(localEmployees);
+  }
+  
   const { data: existingSch } = await sbClient.from('schedules').select('*');
   const schByLocalId = {};
   if(existingSch){
