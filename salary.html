@@ -528,8 +528,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
   <div class="subtitle">四种工作类型 &middot; 自动算薪 &middot; 排班考勤 <span id="cloudBadge" class="cloud-badge disconnected" title="未连接云端">☁ 本地</span></div>
 <div id="syncStatus" class="sync-status"></div>
   <div class="role-switch">
-    <button class="role-btn active" onclick="switchRole('admin')">管理端</button>
-    <button class="role-btn" onclick="switchRole('employee')">员工端</button>
+    <button class="role-btn" onclick="switchRole('admin')">管理端</button>
+    <button class="role-btn active" onclick="switchRole('employee')">员工端</button>
   </div>
 </div>
 
@@ -537,7 +537,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
 <div class="container">
 
   <!-- Admin Page -->
-  <div id="adminPage" class="page active">
+  <div id="adminPage" class="page">
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-num" id="statEmp">0</div><div class="stat-label">员工</div></div>
       <div class="stat-card"><div class="stat-num" id="statToday">0</div><div class="stat-label">今日场次</div></div>
@@ -667,7 +667,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
   </div>
 
   <!-- Employee Page -->
-  <div id="employeePage" class="page">
+  <div id="employeePage" class="page active">
     <div id="empLogin" class="card login-card">
       <h2>&#128075; 员工登录</h2>
       <p>选择姓名并输入密码查看薪资</p>
