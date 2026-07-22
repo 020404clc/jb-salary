@@ -1421,8 +1421,20 @@ async function syncFromSupabase(showToast){
     } catch(e){ console.warn('[Supabase] 拉取 employees 异常:', e); failCount++; }
 
     // --- 2. 同步 sessions（合并 sessions + session_dm）---
-    // 先获取FK反向映射
-    const empIdReverseMap = await _sbGetEmployeeIdReverseMap();
+    // 先获取FK反向映射（云端UUID → 本地ID）
+    let empIdReverseMap = await _sbGetEmployeeIdReverseMap();
+    // fallback：如果云端映射为空，从 localStorage 已有员工数据构建补充映射
+    // localStorage 员工 id 是本地数字ID，但可能残留之前同步时的 cloudId 字段
+    if(Object.keys(empIdReverseMap).length === 0){
+      const localEmps = DB.getEmployees() || [];
+      // 尝试用 profile_id 桥接：查云端 employees 的 profile_id → local_id 关系
+      const { data: fbEmpRows } = await sbClient.from('employees').select('id,profile_id,local_id');
+      if(fbEmpRows){
+        fbEmpRows.forEach(e => {
+          if(e.local_id !== null && e.local_id !== undefined) empIdReverseMap[e.id] = e.local_id;
+        });
+      }
+    }
     // 注意：sessions 和 schedules 的脏表检查在后面合并时处理
     const scriptIdReverseMap = await _sbGetScriptIdReverseMap();
     try {
@@ -1476,35 +1488,14 @@ async function syncFromSupabase(showToast){
           console.log('[Supabase] 跳过脏表 sessions');
           // 不覆盖本地数据
         } else {
-        // 安全检查：对云端拉回的每条 session，检查其 dms 中的 employeeId 是否能被本地 empById 解析
-        // 如果不能解析（说明映射失败），则保留本地版本而不是用云端版本覆盖
-        const _validCloudSess = [];
-        const _invalidCloudSessIds = new Set();
-        for(const cs of _sessDeduped){
-          if(cs.dms && cs.dms.length > 0){
-            const allValid = cs.dms.every(dm => {
-              const eid = dm.employeeId;
-              // 如果是数字或数字字符串，认为是有效本地ID
-              if(typeof eid === 'number' || !isNaN(Number(eid))) return true;
-              // 如果是 UUID 格式且本地找不到，认为映射失败
-              return !!empById(eid);
-            });
-            if(!allValid){
-              _invalidCloudSessIds.add(cs.id);
-              continue; // 跳过这条云端记录，保留本地版本
-            }
-          }
-          _validCloudSess.push(cs);
-        }
-        // 合并：有效云端 + 本地未被云端覆盖的 + 本地映射失败的（保留原本地版本）
-        const validCloudIds = new Set(_validCloudSess.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
+        // 合并策略：云端数据优先 + 保留本地未被覆盖的记录
+        // 不再过滤映射失败的 session（避免 empIdReverseMap 为空时全部丢失）
+        const cloudSessIds = new Set(_sessDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
         const sessLocalOnly = existingLocalSess.filter(s => {
           if(s.id === undefined || s.id === null) return false;
-          // 如果云端映射失败，保留本地版本
-          if(_invalidCloudSessIds.has(s.id)) return true;
-          return !validCloudIds.has(s.id);
+          return !cloudSessIds.has(s.id);
         });
-        const mergedSess = _validCloudSess.concat(sessLocalOnly);
+        const mergedSess = _sessDeduped.concat(sessLocalOnly);
         localStorage.setItem('jb2_sessions', JSON.stringify(mergedSess));
         }
         successCount++;
@@ -1552,35 +1543,13 @@ async function syncFromSupabase(showToast){
           console.log('[Supabase] 跳过脏表 schedules');
           // 不覆盖本地数据
         } else {
-        // 安全检查：对云端拉回的每条 schedule，检查其 dms 中的 dmId 是否能被本地 empById 解析
-        // 如果不能解析（说明映射失败），则保留本地版本而不是用云端版本覆盖
-        const _validCloudSch = [];
-        const _invalidCloudSchIds = new Set();
-        for(const cs of _schDeduped){
-          if(cs.dms && cs.dms.length > 0){
-            const allValid = cs.dms.every(dm => {
-              const eid = dm.dmId;
-              // 如果是数字或数字字符串，认为是有效本地ID
-              if(typeof eid === 'number' || !isNaN(Number(eid))) return true;
-              // 如果是 UUID 格式且本地找不到，认为映射失败
-              return !!empById(eid);
-            });
-            if(!allValid){
-              _invalidCloudSchIds.add(cs.id);
-              continue; // 跳过这条云端记录，保留本地版本
-            }
-          }
-          _validCloudSch.push(cs);
-        }
-        // 合并：有效云端 + 本地未被云端覆盖的 + 本地映射失败的（保留原本地版本）
-        const validSchCloudIds = new Set(_validCloudSch.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
+        // 合并策略：云端数据优先 + 保留本地未被覆盖的记录（不过滤映射失败的记录）
+        const cloudSchIds = new Set(_schDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
         const schLocalOnly = existingLocalSch.filter(s => {
           if(s.id === undefined || s.id === null) return false;
-          // 如果云端映射失败，保留本地版本
-          if(_invalidCloudSchIds.has(s.id)) return true;
-          return !validSchCloudIds.has(s.id);
+          return !cloudSchIds.has(s.id);
         });
-        const mergedSch = _validCloudSch.concat(schLocalOnly);
+        const mergedSch = _schDeduped.concat(schLocalOnly);
         localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').trim()}))));
         }
         successCount++;
@@ -1906,14 +1875,24 @@ async function _sbSyncEmployees(data){
     const profileData = { name: emp.name, phone: emp.phone || '', password: emp.password || '', role: 'employee' };
     if(existingProfile){
       profileId = existingProfile.id;
-      await sbClient.from('profiles').update(profileData).eq('id', profileId);
+      const { error: updateErr } = await sbClient.from('profiles').update(profileData).eq('id', profileId);
+      if(updateErr) console.error('[Supabase] 更新profile失败:', emp.name, updateErr);
     } else {
       const { data: newProfile, error } = await sbClient.from('profiles').insert(profileData).select().maybeSingle();
-      if(error){ console.warn('[Supabase] 创建profile失败:', emp.name, error); continue; }
+      if(error){ console.error('[Supabase] 创建profile失败:', emp.name, error); continue; }
       if(newProfile) profileId = newProfile.id;
+      // maybeSingle 可能返回 null（行已存在但 select 未捕获），重新查询确认
+      if(!profileId){
+        const { data: refetched } = await sbClient.from('profiles').select('id').eq('name', emp.name).eq('role','employee').maybeSingle();
+        if(refetched) profileId = refetched.id;
+      }
+    }
+    if(!profileId){
+      console.error('[Supabase] 无法获取profileId，跳过员工:', emp.name);
+      continue;
     }
 
-    // 2. upsert employee（不使用 local_id 和 accommodation_status）
+    // 2. upsert employee
     const empCloud = {
       profile_id: profileId,
       local_id: emp.id,
@@ -1925,19 +1904,25 @@ async function _sbSyncEmployees(data){
       local_uuid: emp.accommodationStatus || 'none'
     };
     const existingEmp = empByLocalId[emp.id] || (profileId ? (existingEmpRows || []).find(e => e.profile_id === profileId && (e.local_id === null || e.local_id === undefined)) : null);
+    let empError = null;
     if(existingEmp){
-      await sbClient.from('employees').update(empCloud).eq('id', existingEmp.id);
+      const { error: updErr } = await sbClient.from('employees').update(empCloud).eq('id', existingEmp.id);
+      empError = updErr;
     } else {
-      await sbClient.from('employees').insert(empCloud);
+      const { error: insErr } = await sbClient.from('employees').insert(empCloud);
+      empError = insErr;
+    }
+    if(empError){
+      console.error('[Supabase] 写入employee失败:', emp.name, empError);
     }
   }
 }
 
 // ---------- sessions 专用同步 ----------
 async function _sbSyncSessions(data){
-  // 确保员工已同步到云端（否则profileIdMap/empIdMap映射会失败），5分钟缓存
+  // 确保员工已同步到云端（否则profileIdMap/empIdMap映射会失败），30秒缓存
   const now = Date.now();
-  if(now - sbLastEmployeeSync > 300000){
+  if(now - sbLastEmployeeSync > 30000){
     const localEmployees = DB.getEmployees();
     if(localEmployees && localEmployees.length > 0){
       await _sbSyncEmployees(localEmployees);
@@ -2013,15 +1998,25 @@ async function _sbSyncSessions(data){
     // sync session_dm
     if(cloudSessId && sess.dms && sess.dms.length > 0){
       await sbClient.from('session_dm').delete().eq('session_id', cloudSessId);
+      let skippedDms = 0;
       for(const dm of sess.dms){
+        const cloudEmpId = empIdMap[dm.employeeId];
+        if(!cloudEmpId){
+          skippedDms++;
+          console.warn('[Supabase] session_dm跳过：本地员工ID', dm.employeeId, '无法映射到云端UUID，请先确保员工已同步到云端');
+          continue;
+        }
         await sbClient.from('session_dm').insert({
           session_id: cloudSessId,
-          employee_id: empIdMap[dm.employeeId] || null,
+          employee_id: cloudEmpId,
           dm_choice: dm.midnightChoice || 'midnight',
           share_ratio: dm.effectiveHours || 0,
           overtime_fee: dm.overtimeFeePerPerson || 0,
           notes: ''
         });
+      }
+      if(skippedDms === sess.dms.length){
+        console.error('[Supabase] 场次', sess.id, '的所有DM都无法映射到云端员工，请先确保员工已同步到云端');
       }
     }
   }
@@ -2030,9 +2025,9 @@ async function _sbSyncSessions(data){
 // ---------- schedules 专用同步 ----------
 let sbLastEmployeeSync = 0;
 async function _sbSyncSchedules(data){
-  // 确保员工已同步到云端（否则DM ID映射会失败），5分钟缓存
+  // 确保员工已同步到云端（否则DM ID映射会失败），30秒缓存
   const now = Date.now();
-  if(now - sbLastEmployeeSync > 300000){
+  if(now - sbLastEmployeeSync > 30000){
     const localEmployees = DB.getEmployees();
     if(localEmployees && localEmployees.length > 0){
       await _sbSyncEmployees(localEmployees);
@@ -2095,13 +2090,23 @@ async function _sbSyncSchedules(data){
 
     if(cloudSchId && sch.dms && sch.dms.length > 0){
       await sbClient.from('schedule_dm').delete().eq('schedule_id', cloudSchId);
+      let skippedSchDms = 0;
       for(const dm of sch.dms){
+        const cloudSchEmpId = empIdMap[dm.dmId];
+        if(!cloudSchEmpId){
+          skippedSchDms++;
+          console.warn('[Supabase] schedule_dm跳过：本地员工ID', dm.dmId, '无法映射到云端UUID，请先确保员工已同步到云端');
+          continue;
+        }
         await sbClient.from('schedule_dm').insert({
           schedule_id: cloudSchId,
-          employee_id: empIdMap[dm.dmId] || null,
+          employee_id: cloudSchEmpId,
           work_type: '',
           notes: dm.notes || ''
         });
+      }
+      if(skippedSchDms === sch.dms.length){
+        console.error('[Supabase] 排班', sch.id, '的所有DM都无法映射到云端员工，请先确保员工已同步到云端');
       }
     }
   }
