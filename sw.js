@@ -1,6 +1,6 @@
-// Service Worker - 离线缓存 v125 (强制刷新默认员工端)
+// Service Worker - 离线缓存 v125
 const CACHE_NAME='jb-salary-v125';
-const urlsToCache = ['./', './index.html'];
+const urlsToCache = ['./', './index.html', './app.html'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
