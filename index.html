@@ -679,9 +679,12 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
         <span class="month-display" id="salaryMonthDisp"></span>
         <button onclick="salaryMonthNav(1)">&gt;</button>
       </div>
-      <div class="tab-scroll" id="salarySubTabs" style="margin-bottom:8px">
-        <div class="tab-item active" onclick="switchSalarySubTab(0,this)">提成总览</div>
-        <div class="tab-item" onclick="switchSalarySubTab(1,this)">场次明细</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px">
+        <div class="tab-scroll" id="salarySubTabs" style="margin-bottom:0;flex:1;min-width:0">
+          <div class="tab-item active" onclick="switchSalarySubTab(0,this)">提成总览</div>
+          <div class="tab-item" onclick="switchSalarySubTab(1,this)">场次明细</div>
+        </div>
+        <div id="salarySettleBtn" style="flex-shrink:0"></div>
       </div>
       <div id="salarySubContent0"></div>
       <div id="salarySubContent1" style="display:none"></div>
@@ -4047,45 +4050,18 @@ function renderSalarySummary(){
     </div>
   </div>`;
   
-  // v148: 结算状态和操作按钮
+  // v163: 结算状态按钮渲染到tab栏右侧
   const isSettled=isMonthSettled(salaryMonth);
   const settlement=isSettled?getSettlement(salaryMonth):null;
-  let settlementHtml='';
-  if(isSettled){
-    // v151→v162: 已结算状态显示，扩大操作区
-    settlementHtml=`<div style="margin-bottom:10px">
-      <div style="background:linear-gradient(135deg,rgba(76,175,80,.12),rgba(76,175,80,.04));border:1px solid var(--success);border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-        <div>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:16px">✓</span>
-            <span style="font-size:14px;font-weight:600;color:var(--success)">已结算 ${salaryMonth}</span>
-          </div>
-          <div style="font-size:10px;color:var(--text2);margin-top:4px">${new Date(settlement.settledAt).toLocaleString('zh-CN')} · ${settlement.employees.length}名员工</div>
-        </div>
-        <button class="btn btn-sm" onclick="confirmSettleMonth()" style="background:var(--text2);color:#fff;font-size:12px;padding:8px 16px;width:auto;border-radius:8px;white-space:nowrap">
-          🔓 解锁修改
-        </button>
-      </div>
-    </div>`;
-  }else{
-    // v151→v162: 未结算状态显示结算按钮，扩大操作区
-    settlementHtml=`<div style="margin-bottom:10px">
-      <div style="background:linear-gradient(135deg,rgba(255,152,0,.12),rgba(255,152,0,.04));border:1px solid var(--warn);border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-        <div>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:16px">⚠</span>
-            <span style="font-size:14px;font-weight:600;color:var(--warn)">未结算</span>
-          </div>
-          <div style="font-size:10px;color:var(--text2);margin-top:4px">核对后点击结算固化数据</div>
-        </div>
-        <button class="btn btn-sm" onclick="confirmSettleMonth()" style="background:var(--warn);color:#fff;font-size:12px;padding:8px 16px;width:auto;border-radius:8px;white-space:nowrap">
-          ✓ 结算完毕
-        </button>
-      </div>
-    </div>`;
+  const settleBtnEl=document.getElementById('salarySettleBtn');
+  if(settleBtnEl){
+    if(isSettled){
+      const settledTime=new Date(settlement.settledAt).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      settleBtnEl.innerHTML=`<button class="btn btn-sm" onclick="confirmSettleMonth()" style="background:var(--success);color:#fff;font-size:11px;padding:6px 10px;width:auto;border-radius:8px;white-space:nowrap" title="${settledTime} 已结算 · ${settlement.employees.length}人">✓已结算</button>`;
+    }else{
+      settleBtnEl.innerHTML=`<button class="btn btn-sm" onclick="confirmSettleMonth()" style="background:var(--warn);color:#fff;font-size:11px;padding:6px 10px;width:auto;border-radius:8px;white-space:nowrap">✓结算完毕</button>`;
+    }
   }
-  
-  header+=settlementHtml;
 
   // Build per-DM salary data
   const dmSalaryData=emps.map(e=>{
@@ -7368,15 +7344,18 @@ function renderRechargeList(){
   }
 })();
 
-// ===== Pull to Refresh =====
+// ===== Pull to Refresh (v163: 仅页面顶端下拉触发) =====
 (function(){
-  const indicator = document.getElementById('pullRefreshIndicator');
-  let startY = 0, pulling = false, pulled = false, refreshDone = false;
-  const THRESHOLD = 60;
+  var indicator = document.getElementById('pullRefreshIndicator');
+  var startY = 0, startScrollY = 0, pulling = false, pulled = false, refreshDone = false;
+  var THRESHOLD = 80;
+  var DEAD_ZONE = 20;
 
   document.addEventListener('touchstart', function(e){
-    if(window.scrollY <= 0){
+    // 仅当页面在最顶端时才开始追踪下拉
+    if(window.scrollY <= 0 && !pulling){
       startY = e.touches[0].clientY;
+      startScrollY = window.scrollY;
       pulling = true;
       pulled = false;
       refreshDone = false;
@@ -7385,24 +7364,27 @@ function renderRechargeList(){
 
   document.addEventListener('touchmove', function(e){
     if(!pulling) return;
-    const dy = e.touches[0].clientY - startY;
-    if(dy > 10 && window.scrollY <= 0){
+    var dy = e.touches[0].clientY - startY;
+    // 仅在页面仍在顶部且下拉超过死区时才触发
+    if(dy > DEAD_ZONE && window.scrollY <= 0){
       pulled = true;
       e.preventDefault();
-      const progress = Math.min(dy / THRESHOLD, 1);
-      indicator.style.top = (-50 + dy * 0.6) + 'px';
+      var pullDist = dy - DEAD_ZONE;
+      var progress = Math.min(pullDist / THRESHOLD, 1);
+      indicator.style.top = (-50 + pullDist * 0.5) + 'px';
       indicator.classList.add('visible');
       indicator.classList.remove('spinning','done');
-      const icon = indicator.querySelector('.ptr-icon');
+      var icon = indicator.querySelector('.ptr-icon');
       if(icon) icon.style.transform = 'rotate(' + (progress * 360) + 'deg)';
     }
   }, {passive:false});
 
   document.addEventListener('touchend', async function(e){
-    if(!pulling || !pulled){ pulling = false; return; }
+    if(!pulling || !pulled){ pulling = false; pulling = false; indicator.style.top = '-50px'; indicator.classList.remove('visible','spinning','done'); return; }
     pulling = false;
-    const dy = e.changedTouches[0].clientY - startY;
-    if(dy >= THRESHOLD && !refreshDone){
+    var dy = e.changedTouches[0].clientY - startY;
+    var pullDist = dy - DEAD_ZONE;
+    if(pullDist >= THRESHOLD && !refreshDone){
       refreshDone = true;
       indicator.classList.add('spinning');
       indicator.style.top = '10px';
