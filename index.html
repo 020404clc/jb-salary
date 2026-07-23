@@ -601,6 +601,7 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
     </datalist>
     <input type="password" id="loginPassword" placeholder="请输入密码" onkeydown="if(event.key==='Enter')unifiedLogin()">
     <button class="btn btn-primary login-btn" onclick="unifiedLogin()">登 录</button>
+    <div id="loginError" style="color:#e94560;font-size:13px;margin-top:10px;min-height:20px"></div>
   </div>
 </div>
 
@@ -3341,145 +3342,154 @@ function updateRoleIndicator(){
 }
 
 async function unifiedLogin(){
-  console.log('[Login] === unifiedLogin 开始 ===');
-  console.log('[Login] sbClient:', !!sbClient, '| window.supabase:', typeof window.supabase, '| createClient:', typeof window.supabase?.createClient);
-  if(!saveLock('unifiedLogin')){ console.warn('[Login] saveLock 阻止'); return; }
-  const accountVal = document.getElementById('loginAccount').value.trim();
-  const pwd = document.getElementById('loginPassword').value;
-  console.log('[Login] 账号:', accountVal, '| 密码长度:', pwd.length);
-  if(!accountVal){ toast('请选择或输入账号'); return; }
-  if(!pwd){ toast('请输入密码'); return; }
+  var errDiv = document.getElementById('loginError');
+  var loginBtn = document.querySelector('.login-btn');
+  function showErr(msg){ if(errDiv) errDiv.textContent = msg; if(loginBtn) loginBtn.textContent='登 录'; }
+  try{
+    console.log('[Login] === unifiedLogin 开始 ===');
+    if(loginBtn) loginBtn.textContent = '验证中...';
+    showErr('');
 
-  if(accountVal === 'rjx8888'){
-    // === 管理员登录 ===
-    // v158: 先检查本地密码，匹配则立即登录（不等云端，防止网络卡住）
-    let adminPwd = DB.getAdminPwd();
-    console.log('[Login] 本地adminPwd:', adminPwd);
-    
-    if(pwd === adminPwd){
-      // 本地密码直接匹配，立即登录，后台异步同步云端
-      adminLoggedIn = true;
-      currentEmp = null;
-      currentUser = {id:'admin', name:'rjx8888', role:'admin'};
-      document.getElementById('unifiedLoginOverlay').style.display = 'none';
-      document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-      document.getElementById('adminPage').classList.add('active');
-      updateRoleIndicator();
-      renderAdmin();
-      toast('管理员已登录');
-      // 后台异步从云端拉最新密码（不阻塞登录）
-      if(sbClient){
-        (async()=>{
-          try{
-            const {data} = await sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle();
-            if(data && data.value && data.value !== adminPwd){
-              localStorage.setItem('jb2_admin_pwd', data.value);
-              console.log('[Login] 云端密码已同步:', data.value);
-            }
-          }catch(e){ console.warn('[Login] 云端同步失败:',e); }
-        })();
-      }
-      postLoginInit();
-    } else if(sbClient){
-      // 本地密码不匹配，尝试云端密码（5秒超时）
-      console.log('[Login] 本地密码不匹配，查询云端...');
-      const loginBtn = document.querySelector('.login-btn');
-      if(loginBtn) loginBtn.textContent = '验证中...';
-      let cloudPwd = null;
-      try{
-        const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),5000));
-        const query = sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle();
-        const {data} = await Promise.race([query, timeout]);
-        if(data && data.value) cloudPwd = data.value;
-      }catch(e){ console.warn('[Login] 云端查询超时/失败:',e); }
-      if(loginBtn) loginBtn.textContent = '登 录';
-      
-      if(cloudPwd && pwd === cloudPwd){
-        // 云端密码匹配
-        localStorage.setItem('jb2_admin_pwd', cloudPwd);
+    if(!saveLock('unifiedLogin')){ console.warn('[Login] saveLock 阻止'); showErr('操作太快，请稍再试'); return; }
+
+    var accountEl = document.getElementById('loginAccount');
+    var pwdEl = document.getElementById('loginPassword');
+    if(!accountEl || !pwdEl){ showErr('页面元素异常，请刷新重试'); return; }
+    var accountVal = accountEl.value.trim();
+    var pwd = pwdEl.value;
+    console.log('[Login] 账号:', accountVal, '| 密码长度:', pwd.length);
+
+    if(!accountVal){ showErr('请选择或输入账号'); return; }
+    if(!pwd){ showErr('请输入密码'); return; }
+
+    if(accountVal === 'rjx8888'){
+      // === 管理员登录 ===
+      var adminPwd = '';
+      try{ adminPwd = localStorage.getItem('jb2_admin_pwd') || 'rjx123123'; }catch(e){ adminPwd = 'rjx123123'; }
+      console.log('[Login] 本地adminPwd:', adminPwd);
+
+      if(pwd === adminPwd){
+        // 本地密码直接匹配，立即登录
         adminLoggedIn = true;
         currentEmp = null;
         currentUser = {id:'admin', name:'rjx8888', role:'admin'};
-        document.getElementById('unifiedLoginOverlay').style.display = 'none';
-        document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-        document.getElementById('adminPage').classList.add('active');
+        var overlay = document.getElementById('unifiedLoginOverlay');
+        if(overlay) overlay.style.display = 'none';
+        document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
+        var ap = document.getElementById('adminPage');
+        if(ap) ap.classList.add('active');
         updateRoleIndicator();
         renderAdmin();
         toast('管理员已登录');
+        // 后台异步同步云端密码（不阻塞）
+        try{
+          if(sbClient){
+            sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle().then(function(r){
+              if(r && r.data && r.data.value && r.data.value !== adminPwd){
+                localStorage.setItem('jb2_admin_pwd', r.data.value);
+              }
+            }).catch(function(){});
+          }
+        }catch(e){}
         postLoginInit();
       } else {
-        toast('密码错误');
-        document.getElementById('loginPassword').value = '';
-        document.getElementById('loginPassword').focus();
+        // 本地不匹配，尝试云端（5秒超时）
+        var cloudPwd = null;
+        if(sbClient){
+          try{
+            var timeout = new Promise(function(_,rej){setTimeout(function(){rej(new Error('timeout'));},5000);});
+            var query = sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle();
+            var result = await Promise.race([query, timeout]);
+            if(result && result.data && result.data.value) cloudPwd = result.data.value;
+          }catch(e){ console.warn('[Login] 云端查询失败:',e); }
+        }
+        if(cloudPwd && pwd === cloudPwd){
+          localStorage.setItem('jb2_admin_pwd', cloudPwd);
+          adminLoggedIn = true;
+          currentEmp = null;
+          currentUser = {id:'admin', name:'rjx8888', role:'admin'};
+          var overlay2 = document.getElementById('unifiedLoginOverlay');
+          if(overlay2) overlay2.style.display = 'none';
+          document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
+          var ap2 = document.getElementById('adminPage');
+          if(ap2) ap2.classList.add('active');
+          updateRoleIndicator();
+          renderAdmin();
+          toast('管理员已登录');
+          postLoginInit();
+        } else {
+          showErr('密码错误');
+          pwdEl.value = '';
+          pwdEl.focus();
+        }
       }
-    } else {
-      toast('密码错误');
-      document.getElementById('loginPassword').value = '';
-      document.getElementById('loginPassword').focus();
-    }
-  }else{
-    // === 员工登录（按名称匹配） ===
-    let emp = null;
-    let pwdMatch = false;
-    const empName = accountVal;
+    }else{
+      // === 员工登录 ===
+      var emp = null;
+      var pwdMatch = false;
+      var empName = accountVal;
 
-    // 先从本地查找员工
-    emp = DB.getEmployees().find(e => e.name === empName);
-    if(emp){
-      // v155: 优先匹配自定义密码（4位数字），未设置则fallback手机后四位
-      if(emp.password && /^\d{4}$/.test(emp.password) && pwd === emp.password){
-        pwdMatch = true;
-      }
-      if(!pwdMatch){
-        const ph = (emp.phone||'').slice(-4);
-        if(ph && ph.length === 4 && pwd === ph) pwdMatch = true;
-      }
-    }
-    // 本地未匹配，尝试云端 profiles 验证（5秒超时）
-    if(!pwdMatch && sbClient){
-      const loginBtn = document.querySelector('.login-btn');
-      if(loginBtn) loginBtn.textContent = '验证中...';
+      // 本地查找
       try{
-        const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),5000));
-        const query = sbClient.from('profiles').select('*').eq('name',empName).eq('role','employee').maybeSingle();
-        const {data:profile} = await Promise.race([query, timeout]);
-        if(profile){
-          const cloudPh = (profile.phone||'').slice(-4);
-          if(cloudPh && cloudPh.length === 4 && pwd === cloudPh) pwdMatch = true;
+        var allEmps = DB.getEmployees() || [];
+        for(var i=0;i<allEmps.length;i++){
+          if(allEmps[i].name === empName){ emp = allEmps[i]; break; }
         }
-        if(!emp && profile){
-          const emps = DB.getEmployees();
-          const newId = emps.length ? Math.max(...emps.map(e=>e.id))+1 : 1;
-          emp = {id:newId, name:profile.name, phone:profile.phone||'', password:profile.password||'', workType:'full_time', guaranteeLevel:0, hireMonth:'', assessmentPercent:0, accommodationStatus:'none'};
-          emps.push(emp);
-          DB.setEmployees(emps);
+      }catch(e){ console.warn('[Login] 本地员工查询失败:',e); }
+
+      if(emp){
+        if(emp.password && /^\d{4}$/.test(emp.password) && pwd === emp.password) pwdMatch = true;
+        if(!pwdMatch){
+          var ph = (emp.phone||'').slice(-4);
+          if(ph && ph.length === 4 && pwd === ph) pwdMatch = true;
         }
-      }catch(e){ console.warn('[Login] profiles验证超时/失败:',e); }
-      if(loginBtn) loginBtn.textContent = '登 录';
-    }
+      }
 
-    if(!emp){ toast('员工不存在'); return; }
-    if(!pwdMatch){
-      toast('密码错误');
-      document.getElementById('loginPassword').value = '';
-      document.getElementById('loginPassword').focus();
-      return;
-    }
+      // 云端验证
+      if(!pwdMatch && sbClient){
+        try{
+          var timeout2 = new Promise(function(_,rej){setTimeout(function(){rej(new Error('timeout'));},5000);});
+          var query2 = sbClient.from('profiles').select('*').eq('name',empName).eq('role','employee').maybeSingle();
+          var result2 = await Promise.race([query2, timeout2]);
+          if(result2 && result2.data){
+            var profile = result2.data;
+            var cloudPh = (profile.phone||'').slice(-4);
+            if(cloudPh && cloudPh.length === 4 && pwd === cloudPh) pwdMatch = true;
+            if(!emp && profile){
+              var emps2 = DB.getEmployees();
+              var newId = emps2.length ? Math.max.apply(null,emps2.map(function(e){return e.id;}))+1 : 1;
+              emp = {id:newId, name:profile.name, phone:profile.phone||'', password:profile.password||'', workType:'full_time', guaranteeLevel:0, hireMonth:'', assessmentPercent:0, accommodationStatus:'none'};
+              emps2.push(emp);
+              DB.setEmployees(emps2);
+            }
+          }
+        }catch(e){ console.warn('[Login] profiles验证失败:',e); }
+      }
 
-    // 员工登录成功
-    currentEmp = emp;
-    adminLoggedIn = false;
-    // 隐藏登录遮罩，显示员工端
-    document.getElementById('unifiedLoginOverlay').style.display = 'none';
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    document.getElementById('employeePage').classList.add('active');
-    document.getElementById('empLogin').style.display = 'none';
-    document.getElementById('empContent').style.display = 'block';
-    updateRoleIndicator();
-    renderEmpPage();
-    toast('欢迎回来，' + emp.name);
-    // v147: 登录成功后初始化云端连接并同步业务数据
-    postLoginInit();
+      if(!emp){ showErr('员工不存在'); return; }
+      if(!pwdMatch){ showErr('密码错误'); pwdEl.value=''; pwdEl.focus(); return; }
+
+      // 员工登录成功
+      currentEmp = emp;
+      adminLoggedIn = false;
+      var overlay3 = document.getElementById('unifiedLoginOverlay');
+      if(overlay3) overlay3.style.display = 'none';
+      document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
+      var ep = document.getElementById('employeePage');
+      if(ep) ep.classList.add('active');
+      var el = document.getElementById('empLogin');
+      if(el) el.style.display = 'none';
+      var ec = document.getElementById('empContent');
+      if(ec) ec.style.display = 'block';
+      updateRoleIndicator();
+      renderEmpPage();
+      toast('欢迎回来，' + emp.name);
+      postLoginInit();
+    }
+  }catch(ex){
+    console.error('[Login] 登录异常:', ex);
+    showErr('登录异常: ' + (ex.message || ex));
+    if(loginBtn) loginBtn.textContent = '登 录';
   }
 }
 
