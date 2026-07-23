@@ -306,7 +306,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
 .month-nav button:active{transform:scale(.92)}
 
 /* === Input Touch Targets === */
-.form-group input,.form-group select,.form-group textarea{min-height:44px;font-size:15px;transition:border-color .2s ease}
+.form-group input,.form-group select,.form-group textarea{min-height:44px;font-size:16px;transition:border-color .2s ease}
 .form-group select{padding-right:28px;-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a0' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center}
 
 /* === Mobile Responsive Layout (max-width: 480px) === */
@@ -416,6 +416,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
   .salary-summary .total{font-size:26px}
   .modal-sheet{padding:16px 12px}
 }
+
+/* === iOS Keyboard & Visual Viewport Fix === */
+@supports(-webkit-touch-callout:none){
+  .modal-overlay.show{align-items:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .modal-overlay.show .modal-sheet{margin-top:auto;margin-bottom:env(safe-area-inset-bottom,0)}
+}
+/* scroll-margin for form elements in modals (keyboard won't cover) */
+.modal-sheet .form-group input,
+.modal-sheet .form-group select,
+.modal-sheet .form-group textarea{scroll-margin-top:120px;scroll-margin-bottom:80px}
+/* Prevent body scroll when modal open */
+body.modal-open{overflow:hidden;position:fixed;width:100%;height:100%}
+/* Fix iOS input zoom (font-size >= 16px prevents auto-zoom) */
+input[type="text"],input[type="number"],input[type="password"],input[type="tel"],input[type="email"],input[type="date"],input[type="time"]{font-size:16px}
+.form-group input,.form-group select,.form-group textarea{font-size:16px}
 
 /* === Tablet / Larger screens === */
 @media(min-width:481px){
@@ -1190,9 +1205,13 @@ function refreshAllPanels() {
   }
 }
 
-// 统一的保存后处理：刷新所有面板 + 提示
+// 统一的保存后处理：刷新所有面板 + 触发云端同步 + 提示
 function afterSave(msg) {
   refreshAllPanels();
+  // 保存后立即触发云端同步（异步，不阻塞UI）
+  if(sbClient && sbConnected){
+    setTimeout(()=>{ syncFromSupabase(false); }, 800);
+  }
   if (msg) toast(msg);
 }
 
@@ -3410,6 +3429,9 @@ function saveRatioOverride(empId,scriptId){
   const runCount=runCountEl.value!==''?parseInt(runCountEl.value):null;
   const groupPct=groupPctEl.value!==''?parseFloat(groupPctEl.value):null;
   
+  if(runCount!=null&&runCount<0){toast('开次不能为负数');return;}
+  if(groupPct!=null&&(groupPct<0||groupPct>100)){toast('组内比例须在0~100之间');return;}
+  
   const idx=overrides.findIndex(o=>empIdMatch(o.employeeId,empId)&&o.scriptId===scriptId);
   const obj={employeeId:empId,scriptId:scriptId};
   if(runCount!=null)obj.runCountOverride=runCount;
@@ -3465,6 +3487,7 @@ function saveDataOverride(empId){
   const overrides=DB.getDataOverrides();
   const month=monthStr();
   const cars=carsEl.value!==''?parseFloat(carsEl.value):null;
+  if(cars!=null&&cars<0){toast('车次不能为负数');return;}
   
   const idx=overrides.findIndex(o=>empIdMatch(o.employeeId,empId));
   const obj={employeeId:empId};
@@ -4450,6 +4473,7 @@ function saveSchedule(){
   });
   
   if(!scriptId||!date){toast('请填写完整');return;}
+  if(playerCount<0){toast('玩家人数不能为负数');return;}
   if(!dms.length){toast('请至少添加一个DM');return;}
   
   const schedules=DB.getSchedules();
@@ -4620,8 +4644,8 @@ function autoLinkSchedules(session){
 // ========================================
 // MODAL HELPERS
 // ========================================
-function openModal(id){document.getElementById(id).classList.add('show');}
-function closeModal(id){document.getElementById(id).classList.remove('show');}
+function openModal(id){document.getElementById(id).classList.add('show');document.body.classList.add('modal-open');}
+function closeModal(id){document.getElementById(id).classList.remove('show');if(!document.querySelector('.modal-overlay.show'))document.body.classList.remove('modal-open');}
 document.querySelectorAll('.modal-overlay').forEach(m=>{
   m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('show');});
 });
@@ -6383,10 +6407,10 @@ function showInstallGuide(){
     // 5. 启动实时订阅
     subscribeToSupabaseChanges();
     
-    // 5b. 轮询兜底：每30秒拉取一次云端数据（确保实时订阅失效时也能同步）
+    // 5b. 轮询兜底：每15秒拉取一次云端数据（确保实时订阅失效时也能同步）
     setInterval(()=>{
       if(!document.hidden && sbClient) syncFromSupabase(false);
-    }, 30000);
+    }, 15000);
     
     // 5c. 切换到前台时立即同步（手机切回App时秒级响应）
     document.addEventListener('visibilitychange', ()=>{
@@ -6843,6 +6867,30 @@ function renderRechargeList(){
   }
   el.innerHTML=html;
 }
+
+// ===== Keyboard Focus Scroll Fix (iOS/Android) =====
+// 当输入框获得焦点时，自动滚动到可见区域，防止键盘遮挡
+(function(){
+  document.addEventListener('focusin', function(e){
+    const tag = e.target.tagName;
+    if(tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA'){
+      // 延迟执行，等键盘动画完成
+      setTimeout(function(){
+        e.target.scrollIntoView({block:'center',behavior:'smooth'});
+      }, 300);
+    }
+  }, true);
+  // iOS visual viewport resize: 键盘弹出/收起时调整布局
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', function(){
+      document.documentElement.style.height = window.visualViewport.height + 'px';
+      setTimeout(function(){ window.scrollTo(0,0); }, 50);
+    });
+    window.visualViewport.addEventListener('scroll', function(){
+      document.documentElement.style.setProperty('--vv-offset-top', window.visualViewport.offsetTop + 'px');
+    });
+  }
+})();
 
 // ===== Pull to Refresh =====
 (function(){
