@@ -3536,8 +3536,14 @@ async function unifiedLogin(){
       // 员工登录成功
       currentEmp = emp;
       adminLoggedIn = false;
-      // v166: 员工登录时清除脏标记，确保能从云端拉取最新数据
+      // v167: 员工登录时彻底清空本地业务数据，确保从云端全量拉取最新数据
       sbDirtyTables.clear();
+      sbDirtyTimestamps = {};
+      // 清除所有业务数据（保留登录状态和重置标记）
+      var keepKeys = ['jb2_admin_pwd', 'jb2_current_emp_id', 'jb2_reset_flag'];
+      Object.keys(localStorage).filter(function(k){ return k.startsWith('jb2_'); }).forEach(function(k){
+        if(keepKeys.indexOf(k) === -1) localStorage.removeItem(k);
+      });
       var overlay3 = document.getElementById('unifiedLoginOverlay');
       if(overlay3) overlay3.style.display = 'none';
       document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
@@ -3548,9 +3554,12 @@ async function unifiedLogin(){
       var ec = document.getElementById('empContent');
       if(ec) ec.style.display = 'block';
       updateRoleIndicator();
-      renderEmpPage();
-      toast('欢迎回来，' + emp.name);
-      postLoginInit();
+      toast('欢迎回来，' + emp.name + '，正在同步数据...');
+      // v167: 先完成云端同步，再渲染页面，确保数据是最新的
+      postLoginInit().then(function(){
+        renderEmpPage();
+        toast('数据同步完成 ✓');
+      });
     }
   }catch(ex){
     console.error('[Login] 登录异常:', ex);
