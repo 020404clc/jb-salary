@@ -1173,7 +1173,7 @@ const DB={
   getSalarySettlements(){return this._g('salary_settlements');},
   saveSalarySettlements(v){this._s('salary_settlements',v);},
   getSalaryChangeLogs(){return this._g('salary_change_logs');},
-  saveSalaryChangeLogs(v){this._s('salary_change_logs',v);}
+  saveSalaryChangeLogs(v){this._s('salary_change_logs',v);},
   // ========== Supabase Sync Hooks ==========
   _supabaseSync(table, data){
     // 异步写入 Supabase，不阻塞 UI
