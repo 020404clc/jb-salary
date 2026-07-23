@@ -6999,6 +6999,171 @@ let _visibilityHandler = null;
   setTimeout(showInstallGuide, 3000);
 })();
 
+// v169: 强制全量拉取——直接覆盖本地，不走脏表逻辑
+async function _forcePullAllTables(){
+  if(!sbClient) return false;
+  try{
+    // 拉取 scripts
+    const {data: scripts, error: sErr} = await sbClient.from('scripts').select('*');
+    if(!sErr && scripts){
+      const localScripts = scripts.map(r => {
+        const local = {};
+        if(r.local_id != null) local.id = r.local_id;
+        if(r.name != null) local.name = r.name;
+        if(r.standard_hours != null) local.standardHours = r.standard_hours;
+        if(r.duration_from != null) local.durationFrom = r.duration_from;
+        if(r.duration_to != null) local.durationTo = r.duration_to;
+        return local;
+      }).filter(s => s.name);
+      // 按name去重
+      const seen = new Set();
+      const deduped = localScripts.filter(s => { if(seen.has(s.name)) return false; seen.add(s.name); return true; });
+      localStorage.setItem('jb2_scripts', JSON.stringify(deduped));
+      console.log('[v169] 强制拉取 scripts:', deduped.length, '条');
+    }
+    // 拉取 employees + profiles
+    const {data: profiles} = await sbClient.from('profiles').select('*').eq('role','employee');
+    const {data: empRows} = await sbClient.from('employees').select('*');
+    if(profiles || empRows){
+      const profileMap = {};
+      if(profiles) profiles.forEach(p => { profileMap[p.id] = p; });
+      const seenNames = new Set();
+      const emps = [];
+      if(empRows && empRows.length > 0){
+        empRows.forEach(er => {
+          const profile = profileMap[er.profile_id];
+          const name = profile ? profile.name : (er.name || '');
+          if(!name || seenNames.has(name)) return;
+          seenNames.add(name);
+          emps.push({
+            id: er.local_id != null ? er.local_id : (emps.length + 1),
+            name: name,
+            phone: profile ? (profile.phone || '') : '',
+            password: profile ? (profile.password || '') : '',
+            workType: er.work_type || 'full_time',
+            guaranteeLevel: er.guarantee_level || 0,
+            hireMonth: '',
+            assessmentPercent: 0,
+            accommodationStatus: er.accommodation_status || 'none'
+          });
+        });
+      }
+      if(profiles && profiles.length > 0){
+        profiles.forEach(p => {
+          if(seenNames.has(p.name)) return;
+          seenNames.add(p.name);
+          emps.push({
+            id: emps.length + 1,
+            name: p.name,
+            phone: p.phone || '',
+            password: p.password || '',
+            workType: 'full_time',
+            guaranteeLevel: 0,
+            hireMonth: '',
+            assessmentPercent: 0,
+            accommodationStatus: 'none'
+          });
+        });
+      }
+      localStorage.setItem('jb2_employees', JSON.stringify(emps));
+      console.log('[v169] 强制拉取 employees:', emps.length, '条');
+    }
+    // 拉取 sessions + session_dm
+    const {data: sessRows} = await sbClient.from('sessions').select('*');
+    const {data: dmRows} = await sbClient.from('session_dm').select('*');
+    if(sessRows){
+      // build dm map
+      const dmMap = {};
+      if(dmRows) dmRows.forEach(dm => {
+        if(!dmMap[dm.session_id]) dmMap[dm.session_id] = [];
+        let empId = dm.employee_id;
+        // try name from notes
+        const m = (dm.notes||'').match(/\[DM:([^\]]+)\]/);
+        if(m){
+          const emp = emps || JSON.parse(localStorage.getItem('jb2_employees')||'[]');
+          const found = emp.find(e => e.name === m[1]);
+          if(found) empId = found.id;
+        }
+        dmMap[dm.session_id].push({
+          employeeId: empId,
+          effectiveHours: dm.share_ratio || 5,
+          midnightChoice: dm.dm_choice || 'midnight',
+          overtimeFeePerPerson: dm.overtime_fee || 0
+        });
+      });
+      const sessions = sessRows.map(sr => {
+        const dms = dmMap[sr.id] || [];
+        let notes = (sr.notes||'').replace(/\s*\[costumeId:[^\]]*\]/g, '').trim();
+        const costumeMatch = (sr.notes||'').match(/\[costumeId:([^\]]+)\]/);
+        return {
+          id: sr.local_id != null ? sr.local_id : undefined,
+          scriptId: sr.script_id,
+          date: sr.start_date,
+          startTime: sr.start_time,
+          endTime: sr.end_time,
+          playerCount: sr.players,
+          unitPrice: sr.price,
+          actualAmount: sr.actual_amount,
+          deductionAmount: sr.deduction_amount || 0,
+          chargeAmount: sr.costume || 0,
+          costumeId: costumeMatch ? costumeMatch[1] : '',
+          notes: notes,
+          dms: dms
+        };
+      });
+      localStorage.setItem('jb2_sessions', JSON.stringify(sessions));
+      console.log('[v169] 强制拉取 sessions:', sessions.length, '条');
+    }
+    // 拉取 schedules + schedule_dm
+    const {data: schRows} = await sbClient.from('schedules').select('*');
+    const {data: schDmRows} = await sbClient.from('schedule_dm').select('*');
+    if(schRows){
+      const schDmMap = {};
+      if(schDmRows) schDmRows.forEach(sdm => {
+        if(!schDmMap[sdm.schedule_id]) schDmMap[sdm.schedule_id] = [];
+        let dmId = sdm.employee_id;
+        const m2 = (sdm.notes||'').match(/\[DM:([^\]]+)\]/);
+        if(m2){
+          const emp = JSON.parse(localStorage.getItem('jb2_employees')||'[]');
+          const found = emp.find(e => e.name === m2[1]);
+          if(found) dmId = found.id;
+        }
+        schDmMap[sdm.schedule_id].push({dmId: dmId, notes: (sdm.notes||'').replace(/\[DM:[^\]]+\]/,'').trim()});
+      });
+      const schedules = schRows.map(sr => ({
+        id: sr.local_id != null ? sr.local_id : undefined,
+        scriptId: sr.script_id,
+        date: sr.date,
+        expectedTime: sr.time,
+        playerCount: sr.player_count,
+        sessionType: sr.session_type || '',
+        dms: schDmMap[sr.id] || [],
+        status: 'planned',
+        sessionId: null,
+        notes: (sr.notes||'').replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim()
+      }));
+      localStorage.setItem('jb2_schedules', JSON.stringify(schedules));
+      console.log('[v169] 强制拉取 schedules:', schedules.length, '条');
+    }
+    // 拉取其他简单表
+    for(const key of ['attendance','td_exchanges','td_consumption','td_adjustments','ratio_overrides','recharges','salary_settlements','salary_change_logs']){
+      const tbl = SB_TABLE_MAP[key];
+      if(!tbl) continue;
+      try{
+        const {data: rows, error} = await sbClient.from(tbl).select('*');
+        if(!error && rows){
+          localStorage.setItem('jb2_' + key, JSON.stringify(rows));
+          console.log('[v169] 强制拉取', key, ':', rows.length, '条');
+        }
+      }catch(e){}
+    }
+    return true;
+  }catch(e){
+    console.error('[v169] 强制拉取失败:', e);
+    return false;
+  }
+}
+
 // v147: 登录成功后调用 —— 初始化云端连接并同步业务数据
 async function postLoginInit(){
   // v151: Supabase 客户端已在页面加载时预初始化，此处复用；若异常则重试
@@ -7006,8 +7171,19 @@ async function postLoginInit(){
     initSupabase();
   }
   if(sbClient){
-    // 从云端同步业务数据
+    // v169: 登录后强制全量拉取（不走脏表逻辑，确保数据一定被拉到）
+    await _forcePullAllTables();
+    // 再从云端同步业务数据（合并策略）
     await syncFromSupabase(false);
+    // v169: 同步后二次验证——如果关键表仍为空，再强制拉一次
+    if(!DB.getScripts().length){
+      console.warn('[v169] scripts仍为空，二次强制拉取');
+      await _forcePullAllTables();
+    }
+    if(!DB.getEmployees().length){
+      console.warn('[v169] employees仍为空，二次强制拉取');
+      await _forcePullAllTables();
+    }
     if(DB.getEmployees().length > 0){
       migrateSchedules();
     }
