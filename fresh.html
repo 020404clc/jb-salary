@@ -432,6 +432,16 @@ body.modal-open{overflow:hidden;position:fixed;width:100%;height:100%}
 input[type="text"],input[type="number"],input[type="password"],input[type="tel"],input[type="email"],input[type="date"],input[type="time"]{font-size:16px}
 .form-group input,.form-group select,.form-group textarea{font-size:16px}
 
+/* === v145: Overscroll / Rubber Band / Bounce Fix === */
+html,body{overscroll-behavior:none;-webkit-overscroll-behavior:none}
+html{position:fixed;width:100%;height:100%;overflow:hidden}
+body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-y}
+/* Modal scroll isolation: allow scroll inside modal, block page behind it */
+.modal-overlay.show{overscroll-behavior:contain}
+.modal-sheet{overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+/* Tab scroll isolation */
+.tab-scroll,.week-bar,.emp-sub-tabs{overscroll-behavior-x:contain}
+
 /* === Tablet / Larger screens === */
 @media(min-width:481px){
   .stats-grid{gap:10px}
@@ -1208,9 +1218,9 @@ function refreshAllPanels() {
 // 统一的保存后处理：刷新所有面板 + 触发云端同步 + 提示
 function afterSave(msg) {
   refreshAllPanels();
-  // 保存后立即触发云端同步（异步，不阻塞UI）
+  // v145: 保存后立即触发云端同步（异步，不阻塞UI），延迟缩短确保云端数据即时回拉
   if(sbClient && sbConnected){
-    setTimeout(()=>{ syncFromSupabase(false); }, 800);
+    setTimeout(()=>{ syncFromSupabase(false); }, 500);
   }
   if (msg) toast(msg);
 }
@@ -1933,6 +1943,7 @@ async function _sbSyncToSupabase(localKey, data){
     // ===== employees：拆分到 profiles + employees =====
     if(localKey === 'employees'){
       await _sbSyncEmployees(data);
+      sbDirtyTables.delete('employees'); // v145: 上传完成立即清除脏标记
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 employees', data.length, '条');
       return;
@@ -1941,6 +1952,7 @@ async function _sbSyncToSupabase(localKey, data){
     // ===== sessions：拆分到 sessions + session_dm =====
     if(localKey === 'sessions'){
       await _sbSyncSessions(data);
+      sbDirtyTables.delete('sessions');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 sessions', data.length, '条');
       return;
@@ -1949,6 +1961,7 @@ async function _sbSyncToSupabase(localKey, data){
     // ===== schedules：拆分到 schedules + schedule_dm =====
     if(localKey === 'schedules'){
       await _sbSyncSchedules(data);
+      sbDirtyTables.delete('schedules');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 schedules', data.length, '条');
       return;
@@ -1957,6 +1970,7 @@ async function _sbSyncToSupabase(localKey, data){
     // ===== data_overrides：用 jsonb data 列存储整条本地记录 =====
     if(localKey === 'data_overrides'){
       await _sbSyncDataOverrides(data);
+      sbDirtyTables.delete('data_overrides');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 data_overrides', data.length, '条');
       return;
@@ -1965,6 +1979,7 @@ async function _sbSyncToSupabase(localKey, data){
     // ===== ratio_overrides：用 jsonb data 列存储整条本地记录 =====
     if(localKey === 'ratio_overrides'){
       await _sbSyncRatioOverrides(data);
+      sbDirtyTables.delete('ratio_overrides');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 ratio_overrides', data.length, '条');
       return;
@@ -2029,6 +2044,7 @@ async function _sbSyncToSupabase(localKey, data){
         }
       }
     }
+    sbDirtyTables.delete(localKey); // v145: 上传完成立即清除脏标记
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
     // 推送完成后主动拉取一次，确保其他设备的数据也同步过来
@@ -6407,10 +6423,10 @@ function showInstallGuide(){
     // 5. 启动实时订阅
     subscribeToSupabaseChanges();
     
-    // 5b. 轮询兜底：每15秒拉取一次云端数据（确保实时订阅失效时也能同步）
+    // 5b. v145: 轮询兜底：每10秒拉取一次云端数据（确保实时订阅失效时也能同步）
     setInterval(()=>{
       if(!document.hidden && sbClient) syncFromSupabase(false);
-    }, 15000);
+    }, 10000);
     
     // 5c. 切换到前台时立即同步（手机切回App时秒级响应）
     document.addEventListener('visibilitychange', ()=>{
