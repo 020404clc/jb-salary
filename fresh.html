@@ -1510,6 +1510,29 @@ async function syncFromSupabase(showToast){
   let failCount = 0;
 
   try {
+    // --- 0. v164: 检测重置标记 —— 管理员重置后强制清空所有终端本地数据 ---
+    try {
+      const { data: resetRows } = await sbClient.from('settings').select('value').eq('key', 'reset_flag');
+      if(resetRows && resetRows.length > 0){
+        var cloudResetFlag = resetRows[0].value;
+        var localResetFlag = localStorage.getItem('jb2_reset_flag') || '';
+        if(cloudResetFlag !== localResetFlag){
+          console.log('[Supabase] 检测到云端重置标记，强制清空本地数据');
+          Object.keys(localStorage).filter(function(k){ return k.startsWith('jb2_'); }).forEach(function(k){ localStorage.removeItem(k); });
+          localStorage.setItem('jb2_reset_flag', cloudResetFlag);
+          // 清空后直接返回，让下一轮同步重新拉取
+          if(adminLoggedIn || currentEmp){
+            // 如果在登录状态，回到登录页
+            adminLoggedIn = false; currentEmp = null; currentUser = null;
+            showUnifiedLogin();
+            toast('管理员已重置数据，请重新登录');
+          }
+          sbSyncInProgress = false;
+          return true;
+        }
+      }
+    } catch(e){ console.warn('[Supabase] 检测重置标记失败:', e); }
+
     // --- 1. 同步 employees（合并 profiles + employees，用 name 匹配本地 ID）---
     try {
       const { data: profiles, error: pErr } = await sbClient.from('profiles').select('*').eq('role','employee');
@@ -5586,7 +5609,7 @@ function changeAdminPwd(){
 }
 async function clearAllData(){
   if(!requireAdmin())return;
-  if(!confirm('确定要重置所有数据吗？这将同时清空云端数据！')) return;
+  if(!confirm('确定要重置所有数据吗？这将同时清空云端数据并删除所有员工账号！')) return;
   const keys=['employees','sessions','scripts','attendance','td_exchanges','td_consumption','schedules','ratio_overrides','data_overrides','td_adjustments','recharges'];
   keys.forEach(k=>localStorage.removeItem('jb2_'+k));
   // 同步清空 Supabase（await 确保删除完成）
@@ -5598,6 +5621,19 @@ async function clearAllData(){
         console.log('[Supabase] 已清空', tableName);
       }).catch(()=>{})
     ));
+    // v164: 写入重置标记，员工终端检测后会强制清空本地数据（含账号）
+    try{
+      const now = new Date().toISOString();
+      // 尝试 update，失败则 insert
+      const { error: upErr } = await sbClient.from('settings').update({ value: now }).eq('key', 'reset_flag');
+      if(upErr && upErr.code === '42P01'){ /* settings表不存在则跳过 */ }
+      else if(upErr && upErr.details && upErr.details.includes('0 rows')){
+        await sbClient.from('settings').insert({ key: 'reset_flag', value: now }).catch(()=>{});
+      }
+      // 同时清除本地的reset_flag，避免自身也被清空
+      localStorage.removeItem('jb2_reset_flag');
+      console.log('[Supabase] 已写入重置标记:', now);
+    }catch(e){ console.warn('[Supabase] 写入重置标记失败:', e); }
     sbSelfTriggering = false;
   }
   initDemoData();
