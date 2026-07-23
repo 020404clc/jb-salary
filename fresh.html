@@ -2069,8 +2069,8 @@ async function _sbSyncToSupabase(localKey, data){
   try {
     // ===== employees：拆分到 profiles + employees =====
     if(localKey === 'employees'){
+      sbDirtyTables.delete('employees'); // v165: 乐观清除，上传前就解除拉取阻塞
       await _sbSyncEmployees(data);
-      sbDirtyTables.delete('employees'); // v145: 上传完成立即清除脏标记
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 employees', data.length, '条');
       return;
@@ -2078,8 +2078,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== sessions：拆分到 sessions + session_dm =====
     if(localKey === 'sessions'){
-      await _sbSyncSessions(data);
       sbDirtyTables.delete('sessions');
+      await _sbSyncSessions(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 sessions', data.length, '条');
       return;
@@ -2087,8 +2087,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== schedules：拆分到 schedules + schedule_dm =====
     if(localKey === 'schedules'){
-      await _sbSyncSchedules(data);
       sbDirtyTables.delete('schedules');
+      await _sbSyncSchedules(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 schedules', data.length, '条');
       return;
@@ -2096,8 +2096,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== data_overrides：用 jsonb data 列存储整条本地记录 =====
     if(localKey === 'data_overrides'){
-      await _sbSyncDataOverrides(data);
       sbDirtyTables.delete('data_overrides');
+      await _sbSyncDataOverrides(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 data_overrides', data.length, '条');
       return;
@@ -2105,8 +2105,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== ratio_overrides：用 jsonb data 列存储整条本地记录 =====
     if(localKey === 'ratio_overrides'){
-      await _sbSyncRatioOverrides(data);
       sbDirtyTables.delete('ratio_overrides');
+      await _sbSyncRatioOverrides(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 ratio_overrides', data.length, '条');
       return;
@@ -2115,6 +2115,8 @@ async function _sbSyncToSupabase(localKey, data){
     // ===== 通用简单表 =====
     const tableName = SB_TABLE_MAP[localKey];
     if(!tableName) return;
+
+    sbDirtyTables.delete(localKey); // v165: 乐观清除，防止上传失败导致脏标记永久阻塞拉取
 
     // 获取FK映射（仅含employee_id或script_id的表需要）
     let empIdMap = null, scriptIdMap = null;
@@ -2171,7 +2173,6 @@ async function _sbSyncToSupabase(localKey, data){
         }
       }
     }
-    sbDirtyTables.delete(localKey); // v145: 上传完成立即清除脏标记
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
   } catch(e){
