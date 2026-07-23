@@ -1,0 +1,22 @@
+{
+  "name": "剧本杀薪资管理系统",
+  "short_name": "薪资管理",
+  "description": "剧本杀店四种工作类型薪资管理系统，支持场次录入、自动算薪、排班考勤",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0f0f23",
+  "theme_color": "#1a1a2e",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
