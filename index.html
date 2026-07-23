@@ -1938,14 +1938,18 @@ async function syncFromSupabase(showToast){
       showSyncStatus('部分同步失败', 'error');
     }
 
-    renderAdmin();
+    // v147: 仅在已登录状态下渲染数据面板（防止未登录时渲染业务数据）
+    if(adminLoggedIn){
+      renderAdmin();
+    }
     if(currentEmp){
       renderEmpPage();
       renderEmpSessions();
       renderEmpMyData();
       renderEmpScheduleView();
-    } else {
-      // v146: 员工未登录时，更新统一登录页的账号列表
+    }
+    // v147: 同步完成后，如果登录页仍可见，刷新账号列表（使用本地数据）
+    if(!adminLoggedIn && !currentEmp){
       if(typeof populateLoginAccounts === 'function') populateLoginAccounts();
     }
     return true;
@@ -2476,11 +2480,13 @@ async function _sbSyncAdminPwd(pwd){
 })();
 
 // ---------- 实时订阅 ----------
+let sbChannel = null; // v147: 全局订阅频道引用，用于退出时断开
 function subscribeToSupabaseChanges(){
   if(!sbClient) return;
   const tables = [...Object.values(SB_TABLE_MAP), 'profiles', 'session_dm', 'schedule_dm'];
   let channelName = 'jb-sync-' + Date.now();
   let channel = sbClient.channel(channelName);
+  sbChannel = channel; // v147: 保存引用以便退出时断开
   tables.forEach(tableName => {
     channel = channel.on('postgres_changes',
       { event: '*', schema: 'public', table: tableName },
@@ -3000,32 +3006,18 @@ let attMonth=monthStr();
 // ========================================
 // v146: UNIFIED LOGIN SYSTEM (no auto-login, always require credentials)
 // ========================================
-async function populateLoginAccounts(){
+// v147: 登录前仅使用本地数据填充账号列表，不请求云端
+function populateLoginAccounts(){
   const sel = document.getElementById('loginAccount');
   if(!sel) return;
   let options = '<option value="">请选择账号</option><option value="__admin__">🔑 管理员</option>';
-  // 从云端获取员工列表
-  if(sbClient){
-    try{
-      const {data:profiles} = await sbClient.from('profiles').select('*').eq('role','employee');
-      if(profiles && profiles.length){
-        const seenNames = new Set();
-        profiles.forEach(p => {
-          if(seenNames.has(p.name)) return;
-          seenNames.add(p.name);
-          options += `<option value="profile_${p.id}">${p.name}</option>`;
-        });
-      }
-    }catch(e){ console.warn('[Auth] 加载profiles失败:',e); }
-  }
-  // 补充本地员工（去重）
+  // v147: 仅使用本地员工数据，不请求云端profiles表
   const emps = DB.getEmployees();
-  const existingNames = new Set();
-  sel.querySelectorAll('option').forEach(o => existingNames.add(o.textContent));
+  const seenNames = new Set(['管理员']);
   emps.forEach(e => {
-    if(!existingNames.has(e.name)){
-      options += `<option value="emp_${e.id}">${e.name}</option>`;
-    }
+    if(seenNames.has(e.name)) return;
+    seenNames.add(e.name);
+    options += `<option value="emp_${e.id}">${e.name}</option>`;
   });
   sel.innerHTML = options;
 }
@@ -3093,6 +3085,8 @@ async function unifiedLogin(){
       updateRoleIndicator();
       renderAdmin();
       toast('管理员已登录');
+      // v147: 登录成功后初始化云端连接并同步业务数据
+      postLoginInit();
     }else{
       toast('密码错误');
       document.getElementById('loginPassword').value = '';
@@ -3179,6 +3173,8 @@ async function unifiedLogin(){
     updateRoleIndicator();
     renderEmpPage();
     toast('欢迎回来，' + emp.name);
+    // v147: 登录成功后初始化云端连接并同步业务数据
+    postLoginInit();
   }
 }
 
@@ -5810,6 +5806,8 @@ function empLogout(){
   currentEmp=null;
   adminLoggedIn=false;
   currentUser=null;
+  // v147: 退出时停止云端同步
+  stopCloudSync();
   // v146: 退出后显示统一登录页
   showUnifiedLogin();
 }
@@ -6417,7 +6415,10 @@ function showInstallGuide(){
 // ========================================
 // INIT
 // ========================================
-// 初始化 Supabase 并同步数据
+// v147: 登录优先架构 —— 先显示登录页，登录成功后才初始化云端同步
+let _pollingInterval = null;
+let _visibilityHandler = null;
+
 (async function initApp(){
   // 0. 检查是否需要重置（URL参数 ?fresh=1）：清localStorage + 清SW缓存 + 重载
   if(new URLSearchParams(window.location.search).get('fresh')==='1'){
@@ -6436,43 +6437,68 @@ function showInstallGuide(){
     return;
   }
   
-  // 1. 初始化本地演示数据（如果无数据）
+  // 1. v147: 强制清除所有登录状态（防止缓存残留绕过登录）
+  adminLoggedIn = false;
+  currentEmp = null;
+  currentUser = null;
+  localStorage.removeItem('jb2_currentUser');
+  
+  // 2. 初始化本地演示数据（如果无数据）—— 仅用于登录页账号下拉
   initDemoData();
   migrateSchedules();
   
-  // 2. 初始化 Supabase
-  const sbReady = initSupabase();
-  if(sbReady){
-    // 3. 尝试从云端同步数据
-    await syncFromSupabase(false);
-    // 4. 如果有云端数据，覆盖本地 demo 数据后重新初始化
-    if(DB.getEmployees().length > 0){
-      migrateSchedules();
-    }
-    // 5. 启动实时订阅
-    subscribeToSupabaseChanges();
-    
-    // 5b. v145: 轮询兜底：每10秒拉取一次云端数据（确保实时订阅失效时也能同步）
-    setInterval(()=>{
-      if(!document.hidden && sbClient) syncFromSupabase(false);
-    }, 10000);
-    
-    // 5c. 切换到前台时立即同步（手机切回App时秒级响应）
-    document.addEventListener('visibilitychange', ()=>{
-      if(!document.hidden && sbClient) syncFromSupabase(false);
-    });
-  }
-  
-  // 6. v146: 显示统一登录页（禁止自动登录，每次必须手动输入密码）
+  // 3. v147: 立即显示登录页（路由守卫），不初始化 Supabase，不请求任何云端数据
   showUnifiedLogin();
   setTimeout(showInstallGuide, 3000);
 })();
+
+// v147: 登录成功后调用 —— 初始化云端连接并同步业务数据
+async function postLoginInit(){
+  // 初始化 Supabase
+  const sbReady = initSupabase();
+  if(sbReady){
+    // 从云端同步业务数据
+    await syncFromSupabase(false);
+    if(DB.getEmployees().length > 0){
+      migrateSchedules();
+    }
+    // 启动实时订阅
+    subscribeToSupabaseChanges();
+    
+    // 轮询兜底：每10秒拉取一次云端数据
+    if(_pollingInterval) clearInterval(_pollingInterval);
+    _pollingInterval = setInterval(()=>{
+      if(!document.hidden && sbClient && (adminLoggedIn || currentEmp)) syncFromSupabase(false);
+    }, 10000);
+    
+    // 切换到前台时立即同步
+    if(_visibilityHandler) document.removeEventListener('visibilitychange', _visibilityHandler);
+    _visibilityHandler = ()=>{
+      if(!document.hidden && sbClient && (adminLoggedIn || currentEmp)) syncFromSupabase(false);
+    };
+    document.addEventListener('visibilitychange', _visibilityHandler);
+  }
+}
+
+// v147: 停止云端轮询和订阅（退出登录时调用）
+function stopCloudSync(){
+  if(_pollingInterval){ clearInterval(_pollingInterval); _pollingInterval = null; }
+  if(_visibilityHandler){ document.removeEventListener('visibilitychange', _visibilityHandler); _visibilityHandler = null; }
+  // 断开 Supabase 实时订阅
+  if(typeof sbChannel !== 'undefined' && sbChannel){
+    try{ sbChannel.unsubscribe(); }catch(e){}
+    sbChannel = null;
+  }
+  sbClient = null;
+}
 
 
 function adminLogout(){
   adminLoggedIn=false;
   currentUser=null;
   currentEmp=null;
+  // v147: 退出时停止云端同步
+  stopCloudSync();
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   // v146: 退出后显示统一登录页
   showUnifiedLogin();
@@ -6910,7 +6936,12 @@ function renderRechargeList(){
       indicator.classList.add('spinning');
       indicator.style.top = '10px';
       try{
-        await syncFromSupabase(true);
+        // v147: 下拉刷新仅在已登录时执行云端同步
+        if(adminLoggedIn || currentEmp){
+          await syncFromSupabase(true);
+        } else {
+          toast('请先登录');
+        }
         // Re-render current view
         if(typeof renderAdmin === 'function' && document.getElementById('adminPage').classList.contains('active')){
           renderAdmin();
