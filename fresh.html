@@ -2595,7 +2595,7 @@ async function migrateLocalToSupabase(){
 
   // 上传管理员密码
   try {
-    const pwd = localStorage.getItem('jb2_admin_pwd') || '123456';
+    const pwd = localStorage.getItem('jb2_admin_pwd') || 'admin123';
     await _sbSyncAdminPwd(pwd);
   } catch(e){ /* 静默 */ }
 
@@ -5548,7 +5548,7 @@ async function clearAllData(){
         try { await _sbSyncToSupabase(localKey, data); } catch(e){ console.warn('上传', localKey, '异常:', e); }
       }
     }
-    try { await _sbSyncAdminPwd(localStorage.getItem('jb2_admin_pwd') || '123456'); } catch(e){}
+    try { await _sbSyncAdminPwd(localStorage.getItem('jb2_admin_pwd') || 'admin123'); } catch(e){}
   }
   renderAdmin();
   toast('数据已重置');
@@ -6742,16 +6742,22 @@ let _visibilityHandler = null;
   initDemoData();
   migrateSchedules();
   
-  // 3. v147: 立即显示登录页（路由守卫），不初始化 Supabase，不请求任何云端数据
+  // 3. v151: 预初始化 Supabase 客户端（仅建连，不拉取业务数据），使登录时能查询云端管理员密码
+  initSupabase();
+  if(sbClient) updateCloudBadge(true);
+  
+  // 4. 显示登录页
   showUnifiedLogin();
   setTimeout(showInstallGuide, 3000);
 })();
 
 // v147: 登录成功后调用 —— 初始化云端连接并同步业务数据
 async function postLoginInit(){
-  // 初始化 Supabase
-  const sbReady = initSupabase();
-  if(sbReady){
+  // v151: Supabase 客户端已在页面加载时预初始化，此处复用；若异常则重试
+  if(!sbClient){
+    initSupabase();
+  }
+  if(sbClient){
     // 从云端同步业务数据
     await syncFromSupabase(false);
     if(DB.getEmployees().length > 0){
