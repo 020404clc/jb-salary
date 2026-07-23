@@ -1,5 +1,5 @@
-// Service Worker - 离线缓存 v158 (network-first策略)
-const CACHE_NAME='jb-salary-v159';
+// Service Worker - 离线缓存 v160 (network-first策略 + 诊断版)
+const CACHE_NAME='jb-salary-v160';
 const urlsToCache = ['./', './index.html', './app.html', './z-new.html', './fresh.html', './salary.html'];
 
 self.addEventListener('install', event => {
