@@ -3384,17 +3384,19 @@ async function unifiedLogin(){
     // 先从本地查找员工
     emp = DB.getEmployees().find(e => e.name === empName);
     if(emp){
-      if(emp.password && pwd === emp.password) pwdMatch = true;
-      if(!pwdMatch && !emp.password){
-        const ph = (emp.phone||'').slice(-4);
-        if(ph && pwd === ph) pwdMatch = true;
-      }
+      // v154: 员工密码固定为登记手机号后四位
+      const ph = (emp.phone||'').slice(-4);
+      if(ph && ph.length === 4 && pwd === ph) pwdMatch = true;
     }
     // 本地未匹配，尝试云端 profiles 验证
     if(!pwdMatch && sbClient){
       try{
         const {data:profile} = await sbClient.from('profiles').select('*').eq('name',empName).eq('role','employee').maybeSingle();
-        if(profile && profile.password && pwd === profile.password) pwdMatch = true;
+        // v154: 员工云端密码也统一为手机后四位
+        if(profile){
+          const cloudPh = (profile.phone||'').slice(-4);
+          if(cloudPh && cloudPh.length === 4 && pwd === cloudPh) pwdMatch = true;
+        }
         // 如本地无此员工记录，从 profile 创建
         if(!emp && profile){
           const emps = DB.getEmployees();
