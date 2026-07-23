@@ -1,5 +1,5 @@
 // Service Worker - 离线缓存 v166
-const CACHE_NAME='jb-salary-v169';
+const CACHE_NAME='jb-salary-v170';
 const urlsToCache = ['./', './index.html'];
 
 self.addEventListener('install', event => {
