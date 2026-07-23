@@ -541,15 +541,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
 <body>
 <div id="pullRefreshIndicator"><div class="ptr-icon"></div></div>
 
-<!-- Room datalist for autocomplete -->
-<datalist id="roomList">
-  <option value="大漠谣">
-  <option value="云闲庐">
-  <option value="鎏华殿">
-  <option value="青琉园">
-  <option value="黛绒榭">
-</datalist>
-
 <!-- ===== HEADER ===== -->
 <div class="header">
   <h1>&#127917; 剧本杀薪资管理</h1>
@@ -787,7 +778,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
     <div class="form-group"><label>剧本</label><select id="s_script"></select></div>
     <div class="form-row">
       <div class="form-group"><label>日期</label><input type="date" id="s_date" onchange="onSessionDateChange();updateSessionDateDisplay()"></div>
-      <div class="form-group"><label>房号</label><input type="text" id="s_room" list="roomList" placeholder="输入或选择房间"></div>
+      <div class="form-group"><label>房号</label><select id="s_room"><option value="">请选择</option><option value="大漠谣">大漠谣</option><option value="云闲庐">云闲庐</option><option value="鎏华殿">鎏华殿</option><option value="青琉园">青琉园</option><option value="黛绒榭">黛绒榭</option></select></div>
     </div>
     <div class="form-group" id="s_scheduleLink_group" style="display:none"><label>覆盖排班</label><select id="s_scheduleLink" onchange="onScheduleLinkChange()"></select></div>
     <div class="form-row">
@@ -925,7 +916,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
     <div class="form-group"><label>剧本</label><select id="sch_script"></select></div>
     <div class="form-row">
       <div class="form-group"><label>场次</label><select id="sch_session_type" onchange="applySessionType()"><option value="">自定义</option><option value="afternoon">午场</option><option value="evening">晚场</option></select></div>
-      <div class="form-group"><label>房间</label><input type="text" id="sch_room" list="roomList" placeholder="输入或选择房间"></div>
+      <div class="form-group"><label>房间</label><select id="sch_room"><option value="">请选择</option><option value="大漠谣">大漠谣</option><option value="云闲庐">云闲庐</option><option value="鎏华殿">鎏华殿</option><option value="青琉园">青琉园</option><option value="黛绒榭">黛绒榭</option></select></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>日期</label><input type="date" id="sch_date"></div>
