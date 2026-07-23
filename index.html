@@ -1273,6 +1273,20 @@ let sbSyncQueue = [];
 let sbSelfTriggering = false; // 防止自己推送触发拉取的反馈循环
 let sbDirtyTables = new Set(); // 记录本地刚保存、尚未确认上传完成的表
 let sbDirtyTimestamps = {}; // v166: 记录每个脏标记设置时间，用于安全超时
+
+// v168: 通用清除本地业务数据函数，keepKeys 为需要保留的 localStorage 键
+function _clearLocalBusinessData(){
+  var keepKeys = Array.prototype.slice.call(arguments);
+  var all = Object.keys(localStorage);
+  for(var i=0;i<all.length;i++){
+    if(all[i].indexOf('jb2_') === 0 && keepKeys.indexOf(all[i]) === -1){
+      localStorage.removeItem(all[i]);
+    }
+  }
+  sbDirtyTables.clear();
+  sbDirtyTimestamps = {};
+  console.log('[v168] 已清空本地业务数据，保留:', keepKeys);
+}
 let sbSyncDebounceTimer = null; // 去重定时器
 
 // v166: 脏标记安全超时——超过30秒的脏标记自动清除，防止永久阻塞下载
@@ -3437,14 +3451,15 @@ async function unifiedLogin(){
         adminLoggedIn = true;
         currentEmp = null;
         currentUser = {id:'admin', name:'rjx8888', role:'admin'};
+        // v168: 管理员登录也清空本地业务数据，确保从云端全量拉取最新数据
+        _clearLocalBusinessData('jb2_admin_pwd');
         var overlay = document.getElementById('unifiedLoginOverlay');
         if(overlay) overlay.style.display = 'none';
         document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
         var ap = document.getElementById('adminPage');
         if(ap) ap.classList.add('active');
         updateRoleIndicator();
-        renderAdmin();
-        toast('管理员已登录');
+        toast('管理员登录中，正在同步云端数据...');
         // 后台异步同步云端密码（不阻塞）
         try{
           if(sbClient){
@@ -3455,7 +3470,11 @@ async function unifiedLogin(){
             }).catch(function(){});
           }
         }catch(e){}
-        postLoginInit();
+        // v168: 先完成同步，再渲染管理面板
+        postLoginInit().then(function(){
+          renderAdmin();
+          toast('管理端数据同步完成 ✓');
+        });
       } else {
         // 本地不匹配，尝试云端（5秒超时）
         var cloudPwd = null;
@@ -3472,15 +3491,19 @@ async function unifiedLogin(){
           adminLoggedIn = true;
           currentEmp = null;
           currentUser = {id:'admin', name:'rjx8888', role:'admin'};
+          // v168: 管理员云端登录也清空本地数据
+          _clearLocalBusinessData('jb2_admin_pwd');
           var overlay2 = document.getElementById('unifiedLoginOverlay');
           if(overlay2) overlay2.style.display = 'none';
           document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
           var ap2 = document.getElementById('adminPage');
           if(ap2) ap2.classList.add('active');
           updateRoleIndicator();
-          renderAdmin();
-          toast('管理员已登录');
-          postLoginInit();
+          toast('管理员登录中，正在同步云端数据...');
+          postLoginInit().then(function(){
+            renderAdmin();
+            toast('管理端数据同步完成 ✓');
+          });
         } else {
           showErr('密码错误');
           pwdEl.value = '';
@@ -3536,14 +3559,8 @@ async function unifiedLogin(){
       // 员工登录成功
       currentEmp = emp;
       adminLoggedIn = false;
-      // v167: 员工登录时彻底清空本地业务数据，确保从云端全量拉取最新数据
-      sbDirtyTables.clear();
-      sbDirtyTimestamps = {};
-      // 清除所有业务数据（保留登录状态和重置标记）
-      var keepKeys = ['jb2_admin_pwd', 'jb2_current_emp_id', 'jb2_reset_flag'];
-      Object.keys(localStorage).filter(function(k){ return k.startsWith('jb2_'); }).forEach(function(k){
-        if(keepKeys.indexOf(k) === -1) localStorage.removeItem(k);
-      });
+      // v168: 统一使用通用函数清空本地业务数据
+      _clearLocalBusinessData('jb2_admin_pwd', 'jb2_current_emp_id', 'jb2_reset_flag');
       var overlay3 = document.getElementById('unifiedLoginOverlay');
       if(overlay3) overlay3.style.display = 'none';
       document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
