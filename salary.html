@@ -1125,6 +1125,78 @@ const DB={
 };
 
 // ========================================
+// 全局工具函数：文本预处理、保存防抖、统一刷新
+// ========================================
+
+// 文本预处理：标准化换行符、控制字符，防止多次保存产生乱码
+function sanitizeText(str) {
+  if (str === null || str === undefined) return str;
+  if (typeof str !== 'string') return str;
+  // 1. 标准化换行符（CRLF/CR → LF）
+  str = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // 2. 移除非法控制字符（保留 \n \t）
+  str = str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  // 3. 去除首尾空白（保留内部空格和换行）
+  return str;
+}
+
+// 对对象中所有字符串字段做 sanitizeText 处理
+function sanitizeObject(obj) {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === 'string') return sanitizeText(obj);
+  if (Array.isArray(obj)) return obj.map(sanitizeObject);
+  if (typeof obj === 'object') {
+    const result = {};
+    for (const key of Object.keys(obj)) {
+      result[key] = sanitizeObject(obj[key]);
+    }
+    return result;
+  }
+  return obj;
+}
+
+// 保存防抖：防止短时间内多次保存同一类型数据
+const _saveLocks = {};
+function saveLock(key) {
+  if (_saveLocks[key]) return false;
+  _saveLocks[key] = true;
+  setTimeout(() => { _saveLocks[key] = false; }, 1500);
+  return true;
+}
+
+// 统一刷新所有面板数据
+function refreshAllPanels() {
+  // 刷新管理端（根据当前活动的 tab 刷新）
+  const adminPage = document.getElementById('adminPage');
+  if (adminPage && adminPage.classList.contains('active')) {
+    // 获取当前活动的 admin tab
+    const activeTab = document.querySelector('#adminTabs .tab-item.active');
+    const tabIdx = activeTab ? Array.from(document.querySelectorAll('#adminTabs .tab-item')).indexOf(activeTab) : 0;
+    if (tabIdx === 0) { renderSessionTable(); }
+    if (tabIdx === 1) { renderEmployeeList(); }
+    if (tabIdx === 2) { renderScriptList(); }
+    if (tabIdx === 3) { renderSchCalendar(); renderScheduleList(); }
+    if (tabIdx === 4) { renderTimeDiff(); }
+    // 薪资面板始终刷新
+    renderSalaryOverview();
+  }
+  // 刷新员工端
+  const empContent = document.getElementById('empContent');
+  if (empContent && empContent.style.display !== 'none' && currentEmp) {
+    renderEmpPage();
+    renderEmpSessions();
+    renderEmpMyData();
+    renderEmpScheduleView();
+  }
+}
+
+// 统一的保存后处理：刷新所有面板 + 提示
+function afterSave(msg) {
+  refreshAllPanels();
+  if (msg) toast(msg);
+}
+
+// ========================================
 // SUPABASE CLOUD SYNC LAYER
 // ========================================
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
@@ -2864,28 +2936,48 @@ let attMonth=monthStr();
 // ROLE SWITCH
 // ========================================
 function switchRole(role){
+  // 会话隔离：切换端时清除对方登录状态
   document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   if(role==='admin'){
+    // 切到管理端：先清除员工登录状态
+    currentEmp=null;
+    localStorage.removeItem('jb2_currentUser');
     if(!adminLoggedIn){showAdminLoginModal();return;}
     document.querySelector('.role-btn:first-child').classList.add('active');
     document.getElementById('adminPage').classList.add('active');
     renderAdmin();
   }else{
+    // 切到员工端：先清除管理员登录状态
     adminLoggedIn=false;
     document.querySelector('.role-btn:last-child').classList.add('active');
     document.getElementById('employeePage').classList.add('active');
-    if(currentEmp){
-      // 已登录员工，直接显示内容
-      document.getElementById('empLogin').style.display='none';
-      document.getElementById('empContent').style.display='block';
-      renderEmpPage();
-    }else{
-      // 未登录，显示登录界面
-      document.getElementById('empLogin').style.display='block';
-      document.getElementById('empContent').style.display='none';
-      renderEmpSelect();
+    // 检查员工是否已登录（需要验证会话）
+    const savedUser = localStorage.getItem('jb2_currentUser');
+    if(savedUser){
+      try{
+        const u = JSON.parse(savedUser);
+        const sessionAge = Date.now() - (u.loginTimestamp || 0);
+        const SESSION_TIMEOUT = 24 * 60 * 60 * 1000;
+        if(u && u.role === 'employee' && u.employeeId && sessionAge < SESSION_TIMEOUT){
+          const emp = empById(u.employeeId);
+          if(emp){
+            currentEmp = emp;
+            document.getElementById('empLogin').style.display='none';
+            document.getElementById('empContent').style.display='block';
+            renderEmpPage();
+            return;
+          }
+        }
+        // 会话无效或过期
+        localStorage.removeItem('jb2_currentUser');
+      }catch(e){ localStorage.removeItem('jb2_currentUser'); }
     }
+    // 未登录或会话无效，显示登录界面
+    currentEmp=null;
+    document.getElementById('empLogin').style.display='block';
+    document.getElementById('empContent').style.display='none';
+    renderEmpSelect();
   }
 }
 
@@ -3310,6 +3402,7 @@ function openRatioOverrideModal(empId,scriptId){
 }
 
 function saveRatioOverride(empId,scriptId){
+  if(!saveLock('ratioOverride_'+empId+'_'+scriptId)){toast('请勿重复提交');return;}
   const runCountEl=document.getElementById('ro_runCount');
   const groupPctEl=document.getElementById('ro_groupPct');
   const overrides=DB.getRatioOverrides();
@@ -3327,9 +3420,7 @@ function saveRatioOverride(empId,scriptId){
   
   DB.saveRatioOverrides(overrides.filter(o=>o.runCountOverride!=null||o.groupPercentOverride!=null));
   closeModal('dataOverrideModal');
-  toast('比例覆盖已保存');
-  renderScriptList();
-  renderAdmin();
+  afterSave('比例覆盖已保存');
 }
 
 function deleteRatioOverride(empId,scriptId){
@@ -3369,6 +3460,7 @@ function openDataOverrideModal(empId){
 }
 
 function saveDataOverride(empId){
+  if(!saveLock('dataOverride_'+empId)){toast('请勿重复提交');return;}
   const carsEl=document.getElementById('do_cars');
   const overrides=DB.getDataOverrides();
   const month=monthStr();
@@ -3384,9 +3476,7 @@ function saveDataOverride(empId){
   
   DB.saveDataOverrides(overrides.filter(o=>o.monthlyCarTripsOverride!=null));
   closeModal('dataOverrideModal');
-  toast('数据覆盖已保存');
-  renderEmployeeList();
-  renderAdmin();
+  afterSave('数据覆盖已保存');
 }
 
 function deleteDataOverride(empId){
@@ -4342,10 +4432,11 @@ function applySessionType(){
 
 function saveSchedule(){
   if(!requireAdmin())return;
+  if(!saveLock('schedule')){toast('请勿重复提交');return;}
   const scriptId=parseInt(document.getElementById('sch_script').value);
   const date=document.getElementById('sch_date').value;
   const expectedTime=document.getElementById('sch_time').value;
-  const notes=document.getElementById('sch_notes').value;
+  const notes=sanitizeText(document.getElementById('sch_notes').value);
   const playerCount=parseInt(document.getElementById('sch_playerCount').value)||0;
   const sessionType=document.getElementById('sch_session_type').value;
   const room=document.getElementById('sch_room').value.trim();
@@ -4354,7 +4445,7 @@ function saveSchedule(){
   const dms=[];
   document.querySelectorAll('#schDMList .dm-entry').forEach(el=>{
     const dmId=parseInt(el.querySelector('.sch-dm-emp').value);
-    const dmNotes=el.querySelector('.sch-dm-note').value;
+    const dmNotes=sanitizeText(el.querySelector('.sch-dm-note').value);
     if(dmId)dms.push({dmId,notes:dmNotes||''});
   });
   
@@ -4379,9 +4470,6 @@ function saveSchedule(){
   }
   DB.saveSchedules(schedules);
   closeModal('scheduleModal');
-  renderSchCalendar();
-  renderScheduleList();
-  if(currentEmp){ renderEmpPage(); renderEmpScheduleView(); }
   
   // Check if any DM had 调休 on this date and refund resources
   // schedules already declared above
@@ -4453,7 +4541,7 @@ function saveSchedule(){
     }
   });
   
-  toast('排班已保存');
+  afterSave('排班已保存');
 }
 
 function deleteSchedule(id){
@@ -4461,10 +4549,7 @@ function deleteSchedule(id){
   const before=DB.getSchedules().length;
   const updated=DB.getSchedules().filter(s=>String(s.id)!==idStr);
   DB.saveSchedules(updated);
-  renderSchCalendar();
-  renderScheduleList();
-  if(currentEmp){ renderEmpPage(); renderEmpScheduleView(); }
-  toast(before>updated.length?'已删除排班':'未找到匹配记录');
+  afterSave(before>updated.length?'已删除排班':'未找到匹配记录');
 }
 
 // Debug: show all schedule data on screen
@@ -4681,6 +4766,7 @@ function editSession(id){openSessionModal(id);}
 
 function saveSession(){
   if(!canOperate()){toast('请先登录');return;}
+  if(!saveLock('session')){toast('请勿重复提交');return;}
   // 员工只能保存自己录入的场次
   if(!isAdmin()&&currentEmp){document.getElementById('s_createdBy').value=currentEmp.id;}
   const scriptId=parseInt(document.getElementById('s_script').value);
@@ -4693,12 +4779,13 @@ function saveSession(){
   const actualAmount=parseFloat(document.getElementById('s_actual').value)||0;
   const deductionAmount=parseFloat(document.getElementById('s_deduction').value)||0;
   const deductedCardPhone=document.getElementById('s_deductedCardPhone').value;
-  const costumeId=document.getElementById('s_costume').value;
-  const notes=document.getElementById('s_notes').value;
+  const costumeId=sanitizeText(document.getElementById('s_costume').value);
+  const notes=sanitizeText(document.getElementById('s_notes').value);
   const editId=document.getElementById('s_editId').value;
   const createdBy=document.getElementById('s_createdBy').value;
 
   if(!scriptId||!date||!startTime||!endTime){toast('请填写完整场次信息');return;}
+  if(playerCount<0||unitPrice<0||actualAmount<0){toast('数值不能为负数');return;}
   // Handle cross-midnight sessions
   let endDate=date;
   if(endTime<startTime){
@@ -4761,9 +4848,7 @@ function saveSession(){
   }
   
   closeModal('sessionModal');
-  renderAdmin();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
-  toast('场次已保存');
+  afterSave('场次已保存');
 }
 
 function deleteSession(id){
@@ -4778,8 +4863,7 @@ function deleteSession(id){
   schedules.forEach(sch=>{if(sch.sessionId===id){sch.sessionId=null;sch.status='planned';}});
   DB.saveSchedules(schedules);
   DB.saveSessions(DB.getSessions().filter(s=>s.id!==id));
-  renderAdmin();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
+  afterSave('已删除');
 }
 
 // ========================================
@@ -4847,7 +4931,8 @@ function editEmployee(id){openEmployeeModal(id);}
 
 function saveEmployee(){
   if(!requireAdmin())return;
-  const name=document.getElementById('e_name').value.trim();
+  if(!saveLock('employee')){toast('请勿重复提交');return;}
+  const name=sanitizeText(document.getElementById('e_name').value.trim());
   const phone=document.getElementById('e_phone').value.trim();
   const password=document.getElementById('e_pwd').value.trim()||phone.slice(-4);
   const editId=document.getElementById('e_editId').value;
@@ -4864,16 +4949,13 @@ function saveEmployee(){
   else{empData.id=nextId(emps);emps.push(empData);}
   DB.saveEmployees(emps);
   closeModal('employeeModal');
-  renderAdmin();
-  renderEmployeeList();
-  renderEmpSelect();
-  toast('员工已保存');
+  afterSave('员工已保存');
 }
 
 function deleteEmployee(id){
   if(!requireAdmin())return;
   DB.saveEmployees(DB.getEmployees().filter(e=>!empIdMatch(e.id,id)));
-  renderAdmin();
+  afterSave('已删除');
 }
 
 // ========================================
@@ -4901,7 +4983,8 @@ function editScript(id){openScriptModal(id);}
 
 function saveScript(){
   if(!requireAdmin())return;
-  const name=document.getElementById('sc_name').value.trim();
+  if(!saveLock('script')){toast('请勿重复提交');return;}
+  const name=sanitizeText(document.getElementById('sc_name').value.trim());
   const standardHours=parseFloat(document.getElementById('sc_hours').value)||5;
   const durationFrom=parseFloat(document.getElementById('sc_durationFrom').value)||0;
   const durationTo=parseFloat(document.getElementById('sc_durationTo').value)||0;
@@ -4912,14 +4995,13 @@ function saveScript(){
   else{scripts.push({id:nextId(scripts),name,standardHours,durationFrom,durationTo});}
   DB.saveScripts(scripts);
   closeModal('scriptModal');
-  renderAdmin();
-  toast('剧本已保存');
+  afterSave('剧本已保存');
 }
 
 function deleteScript(id){
   if(!requireAdmin())return;
   DB.saveScripts(DB.getScripts().filter(s=>s.id!==id));
-  renderAdmin();
+  afterSave('已删除');
 }
 
 // ========================================
@@ -5131,6 +5213,7 @@ function getSameDayOffRemaining(empId){
 
 function saveTDConsumption(){
   if(!canOperate()){toast('请先登录');return;}
+  if(!saveLock('tdConsumption')){toast('请勿重复提交');return;}
   const empId=parseInt(document.getElementById('tdc_empId').value);
   const type=document.getElementById('tdc_type').value;
   const date=document.getElementById('tdc_date').value;
@@ -5212,9 +5295,7 @@ function saveTDConsumption(){
   });
   DB.saveTDConsumptions(consumptions);
   closeModal('tdConsumeModal');
-  renderTimeDiff();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
-  toast(useBalanceForDayOff?'调休已记录（消耗9.5h时差）':'时差消耗已记录');
+  afterSave(useBalanceForDayOff?'调休已记录（消耗9.5h时差）':'时差消耗已记录');
 }
 
 // ---- Leave Modal (请假) ----
@@ -5261,6 +5342,7 @@ function openLeaveModal(empId){
 }
 
 function saveLeave(){
+  if(!saveLock('leave')){toast('请勿重复提交');return;}
   const empId=parseInt(document.getElementById('leave_empId').value);
   const date=document.getElementById('leave_date').value;
   if(!empId||!date){toast('请填写完整');return;}
@@ -5283,9 +5365,7 @@ function saveLeave(){
   });
   DB.saveTDConsumptions(consumptions);
   closeModal('leaveModal');
-  renderTimeDiff();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
-  toast('请假已记录');
+  afterSave('请假已记录');
 }
 
 // ---- Makeup Card (补卡) ----
@@ -5381,6 +5461,7 @@ function getMaxMakeupLateTime(empId, date) {
 }
 
 function doMakeupCard(empId, date, fromModal) {
+  if(!saveLock('makeupCard_'+empId+'_'+date)){toast('请勿重复提交');return;}
   const today = todayStr();
   if (date !== today) {
     toast('只能补卡当天，无法补卡过去日期');
@@ -5404,11 +5485,8 @@ function doMakeupCard(empId, date, fromModal) {
     att.push({ id: nextId(att), employeeId: empId, date: date, status: 'normal', isMakeup: true });
   }
   DB.saveAttendance(att);
-  toast('补卡成功！本月剩余 ' + (MAKEUP_LIMIT_PER_MONTH - used - 1) + ' 次');
   if (fromModal) closeModal('makeupModal');
-  renderTimeDiff();
-  renderAttendance();
-  if (currentEmp) { renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
+  afterSave('补卡成功！本月剩余 ' + (MAKEUP_LIMIT_PER_MONTH - used - 1) + ' 次');
 }
 
 function getAdjustedStartTime(empId,date){
@@ -5465,6 +5543,7 @@ function onTDTypeChange(){
   }
 }
 function saveTDExchange(){
+  if(!saveLock('tdExchange')){toast('请勿重复提交');return;}
   const empId=parseInt(document.getElementById('td_emp').value);
   const type=document.getElementById('td_type').value;
   let hours=parseFloat(document.getElementById('td_hours').value)||0;
@@ -5497,9 +5576,7 @@ function saveTDExchange(){
     DB.saveTDAdjustments(adjs);
   }
   closeModal('tdExchangeModal');
-  renderTimeDiff();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
-  toast('操作成功');
+  afterSave('操作成功');
 }
 
 function deleteTDAdjustment(adjId){
@@ -5508,9 +5585,7 @@ function deleteTDAdjustment(adjId){
   if(idx < 0){ toast('未找到该调整记录'); return; }
   adjustments.splice(idx, 1);
   DB.saveTDAdjustments(adjustments);
-  renderTimeDiff();
-  if(currentEmp){ renderEmpPage(); renderEmpSessions(); renderEmpMyData(); renderEmpScheduleView(); }
-  toast('已撤销该调整');
+  afterSave('已撤销该调整');
 }
 
 // ========================================
@@ -5549,10 +5624,14 @@ async function renderEmpSelect(){
 }
 
 async function empLogin(){
+  // 防抖：防止快速多次点击
+  if(!saveLock('empLogin')) return;
   const selVal=document.getElementById('empSelect').value;
   const pwd=document.getElementById('empPwd').value;
   if(!selVal){toast('请选择姓名');return;}
   if(!pwd){toast('请输入密码');return;}
+  // 会话隔离：员工登录时清除管理员登录状态
+  adminLoggedIn=false;
 
   let emp=null;
   let profileId=null;
@@ -6417,6 +6496,9 @@ async function submitAdminLogin(){
   const input=document.getElementById('adminPwdInput');
   const pwd=input.value;
   if(!pwd){toast('请输入密码');return;}
+  // 会话隔离：管理员登录时清除员工登录状态
+  currentEmp=null;
+  localStorage.removeItem('jb2_currentUser');
   // 从 settings 表获取管理员密码
   let adminPwd=DB.getAdminPwd(); // 本地默认
   if(sbClient){
@@ -6446,17 +6528,13 @@ function deleteConsumption(id){
   if(!canOperate()){toast('请先登录');return;}
   const consumptions=DB.getTDConsumptions().filter(c=>c.id!==id);
   DB.saveTDConsumptions(consumptions);
-  renderTimeDiff();
-  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();renderEmpScheduleView();}
-  toast('已删除');
+  afterSave('已删除');
 }
 function deleteExchange(id){
   if(!canOperate()){toast('请先登录');return;}
   const exchanges=DB.getTDExchanges().filter(x=>x.id!==id);
   DB.saveTDExchanges(exchanges);
-  renderTimeDiff();
-  if(currentEmp){renderEmpPage();renderEmpSessions();renderEmpMyData();renderEmpScheduleView();}
-  toast('已删除');
+  afterSave('已删除');
 }
 // 一键清除指定员工的所有时差消耗和兑换记录（控制台用）
 // 用法: clearEmpTDEmpRecords('小明') 或 clearEmpTDEmpRecords(1)
@@ -6630,31 +6708,28 @@ function openRechargeModal(){
 }
 
 function saveRecharge(){
+  if(!saveLock('recharge')){toast('请勿重复提交');return;}
   const dmRaw=document.getElementById('rc_dm').value;
   if(dmRaw===''){toast('请选择归属DM');return;}
   const dmId=parseInt(dmRaw)||0;
   const phone=document.getElementById('rc_phone').value.trim();
   const amount=parseFloat(document.getElementById('rc_amount').value);
   const date=document.getElementById('rc_date').value||todayStr();
-  const note=document.getElementById('rc_note').value.trim();
+  const note=sanitizeText(document.getElementById('rc_note').value.trim());
   if(!phone||phone.length<1){toast('请输入手机号后六位');return;}
   if(isNaN(amount)||amount<=0){toast('请输入有效的充值金额');return;}
   const recharges=DB.getRecharges();
   recharges.push({id:nextId(recharges),dmId,phone,amount,date,note});
   DB.saveRecharges(recharges);
   closeModal('rechargeModal');
-  toast('充值记录已保存');
-  renderRechargeList();
-  renderCardOverview();
+  afterSave('充值记录已保存');
 }
 
 function deleteRecharge(id){
   let recharges=DB.getRecharges();
   recharges=recharges.filter(r=>r.id!==id);
   DB.saveRecharges(recharges);
-  renderRechargeList();
-  renderCardOverview();
-  toast('已删除');
+  afterSave('已删除');
 }
 
 let cardOverviewExpanded=false;
