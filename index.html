@@ -908,7 +908,7 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
     <div id="e_semi_fields" style="display:none">
       <div class="form-group"><label>考核百分比(0-9%)</label><input type="number" id="e_assess_semi" min="0" max="9" value="0"></div>
     </div>
-    <div class="form-group"><label>登录密码</label><input type="text" id="e_pwd" placeholder="默认手机后4位"></div>
+    <div class="form-group"><label>登录密码</label><input type="text" id="e_pwd" placeholder="4位数字，默认手机后4位" maxlength="4" inputmode="numeric" pattern="[0-9]{4}"></div>
     <input type="hidden" id="e_editId" value="">
     <button class="btn btn-primary" onclick="saveEmployee()">确认保存</button>
   </div>
@@ -3384,9 +3384,14 @@ async function unifiedLogin(){
     // 先从本地查找员工
     emp = DB.getEmployees().find(e => e.name === empName);
     if(emp){
-      // v154: 员工密码固定为登记手机号后四位
-      const ph = (emp.phone||'').slice(-4);
-      if(ph && ph.length === 4 && pwd === ph) pwdMatch = true;
+      // v155: 优先匹配自定义密码（4位数字），未设置则fallback手机后四位
+      if(emp.password && /^\d{4}$/.test(emp.password) && pwd === emp.password){
+        pwdMatch = true;
+      }
+      if(!pwdMatch){
+        const ph = (emp.phone||'').slice(-4);
+        if(ph && ph.length === 4 && pwd === ph) pwdMatch = true;
+      }
     }
     // 本地未匹配，尝试云端 profiles 验证
     if(!pwdMatch && sbClient){
@@ -5433,7 +5438,10 @@ function saveEmployee(){
   if(!saveLock('employee')){toast('请勿重复提交');return;}
   const name=sanitizeText(document.getElementById('e_name').value.trim());
   const phone=document.getElementById('e_phone').value.trim();
-  const password=document.getElementById('e_pwd').value.trim()||phone.slice(-4);
+  const pwdInput=document.getElementById('e_pwd').value.trim();
+  // v155: 密码强制4位数字
+  if(pwdInput && !/^\d{4}$/.test(pwdInput)){ toast('登录密码必须为4位数字'); return; }
+  const password=pwdInput||phone.slice(-4);
   const editId=document.getElementById('e_editId').value;
   if(!name){toast('请填写姓名');return;}
   const empData={
@@ -6616,7 +6624,81 @@ function renderEmpMyData(){
     </div>
   </div>`;
   
+  // v155: 修改密码区域
+  const phoneLast4 = (currentEmp.phone||'').slice(-4);
+  const hasCustomPwd = currentEmp.password && /^\d{4}$/.test(currentEmp.password);
+  html+=`<div class="mydata-card">
+    <div class="card-title">&#128274; 修改登录密码</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+      当前密码：${hasCustomPwd ? '自定义密码 ('+currentEmp.password+')' : (phoneLast4 ? '手机尾号 ('+phoneLast4+')' : '未设置')}
+    </div>
+    <input type="password" id="empOldPwd" placeholder="输入当前密码" maxlength="4" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;background:var(--input);color:var(--text);box-sizing:border-box;margin-bottom:8px;letter-spacing:6px;text-align:center">
+    <input type="password" id="empNewPwd" placeholder="新密码（4位数字）" maxlength="4" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;background:var(--input);color:var(--text);box-sizing:border-box;margin-bottom:8px;letter-spacing:6px;text-align:center">
+    <input type="password" id="empConfirmPwd" placeholder="确认新密码" maxlength="4" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;background:var(--input);color:var(--text);box-sizing:border-box;margin-bottom:10px;letter-spacing:6px;text-align:center">
+    <button class="btn btn-primary btn-block" onclick="changeEmpPassword()">确认修改</button>
+  </div>`;
+  
   el.innerHTML=html;
+}
+
+// v155: 员工修改密码
+async function changeEmpPassword(){
+  if(!currentEmp){ toast('请先登录'); return; }
+  if(!saveLock('changeEmpPwd')) return;
+  
+  const oldPwd = document.getElementById('empOldPwd')?.value || '';
+  const newPwd = document.getElementById('empNewPwd')?.value || '';
+  const confirmPwd = document.getElementById('empConfirmPwd')?.value || '';
+  
+  if(!oldPwd){ toast('请输入当前密码'); return; }
+  if(!newPwd){ toast('请输入新密码'); return; }
+  if(!/^\d{4}$/.test(newPwd)){ toast('密码必须为4位数字'); return; }
+  if(newPwd !== confirmPwd){ toast('两次输入的新密码不一致'); return; }
+  if(oldPwd === newPwd){ toast('新密码不能和旧密码相同'); return; }
+  
+  // 验证旧密码
+  const phoneLast4 = (currentEmp.phone||'').slice(-4);
+  const validOld = (currentEmp.password && /^\d{4}$/.test(currentEmp.password) && oldPwd === currentEmp.password)
+    || (phoneLast4 && oldPwd === phoneLast4);
+  
+  // 也尝试云端验证
+  if(!validOld && sbClient){
+    try{
+      const {data:profile} = await sbClient.from('profiles').select('*').eq('name',currentEmp.name).eq('role','employee').maybeSingle();
+      if(profile){
+        const cloudPh = (profile.phone||'').slice(-4);
+        if(profile.password && /^\d{4}$/.test(profile.password) && oldPwd === profile.password) { /* valid */ }
+        else if(cloudPh && oldPwd === cloudPh) { /* valid */ }
+        else { toast('当前密码错误'); return; }
+      } else {
+        toast('当前密码错误'); return;
+      }
+    }catch(e){ toast('验证失败，请重试'); return; }
+  } else if(!validOld){
+    toast('当前密码错误'); return;
+  }
+  
+  // 更新本地密码
+  const emps = DB.getEmployees();
+  const idx = emps.findIndex(e => e.id === currentEmp.id || e.name === currentEmp.name);
+  if(idx >= 0){
+    emps[idx].password = newPwd;
+    DB.setEmployees(emps);
+    currentEmp.password = newPwd;
+  }
+  
+  // 同步到云端
+  if(sbClient){
+    try{
+      const {data:profile} = await sbClient.from('profiles').select('*').eq('name',currentEmp.name).eq('role','employee').maybeSingle();
+      if(profile){
+        await sbClient.from('profiles').update({password: newPwd}).eq('id', profile.id);
+      }
+    }catch(e){ console.warn('[Pwd] 云端同步失败:', e); }
+  }
+  
+  toast('密码修改成功');
+  renderEmpMyData();
 }
 
 // ========================================
