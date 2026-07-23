@@ -3341,22 +3341,28 @@ function updateRoleIndicator(){
 }
 
 async function unifiedLogin(){
-  if(!saveLock('unifiedLogin')) return;
+  console.log('[Login] === unifiedLogin 开始 ===');
+  console.log('[Login] sbClient:', !!sbClient, '| window.supabase:', typeof window.supabase, '| createClient:', typeof window.supabase?.createClient);
+  if(!saveLock('unifiedLogin')){ console.warn('[Login] saveLock 阻止'); return; }
   const accountVal = document.getElementById('loginAccount').value.trim();
   const pwd = document.getElementById('loginPassword').value;
+  console.log('[Login] 账号:', accountVal, '| 密码长度:', pwd.length);
   if(!accountVal){ toast('请选择或输入账号'); return; }
   if(!pwd){ toast('请输入密码'); return; }
 
   if(accountVal === 'rjx8888'){
     // === 管理员登录 ===
     let adminPwd = DB.getAdminPwd();
+    console.log('[Login] 本地adminPwd:', adminPwd);
     // 优先从云端获取最新管理员密码
     if(sbClient){
       try{
         const {data} = await sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle();
+        console.log('[Login] 云端adminPwd:', data?.value);
         if(data && data.value) adminPwd = data.value;
-      }catch(e){ console.warn('[Auth] 读取管理员密码失败:',e); }
+      }catch(e){ console.warn('[Login] 读取管理员密码失败:',e); }
     }
+    console.log('[Login] 最终adminPwd:', adminPwd, '| 匹配:', pwd === adminPwd);
     if(pwd === adminPwd){
       adminLoggedIn = true;
       currentEmp = null;
@@ -6778,7 +6784,34 @@ function initDemoData(){
 // ========================================
 // PWA
 // ========================================
-if('serviceWorker' in navigator && window.location.protocol === 'https:'){navigator.serviceWorker.register('sw.js').catch(()=>{});}
+if('serviceWorker' in navigator && window.location.protocol === 'https:'){
+  navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(reg=>{
+    // v158: 强制检查SW更新
+    reg.update().catch(()=>{});
+    // 检测到新SW安装后，等其激活并刷新页面
+    reg.addEventListener('updatefound',()=>{
+      const newSW=reg.installing;
+      if(newSW){
+        newSW.addEventListener('statechange',()=>{
+          if(newSW.state==='activated' && navigator.serviceWorker.controller){
+            console.log('[SW] 新版本已激活，刷新页面');
+            location.reload();
+          }
+        });
+      }
+    });
+    // 如果当前controller不是最新的，立即刷新
+    if(navigator.serviceWorker.controller){
+      navigator.serviceWorker.addEventListener('controllerchange',()=>{
+        location.reload();
+      });
+    }
+  }).catch(()=>{});
+  // 每5分钟检查一次SW更新
+  setInterval(()=>{
+    navigator.serviceWorker.getRegistration().then(r=>{if(r)r.update().catch(()=>{});});
+  },300000);
+}
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;});
 function showInstallGuide(){
