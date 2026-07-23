@@ -2151,13 +2151,15 @@ async function _sbSyncToSupabase(localKey, data){
     sbDirtyTables.delete(localKey); // v145: 上传完成立即清除脏标记
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
-    // 推送完成后主动拉取一次，确保其他设备的数据也同步过来
-    setTimeout(()=>{ syncFromSupabase(false); }, 500);
   } catch(e){
     console.warn('[Supabase] 同步', localKey, '异常:', e);
   } finally {
-    // 延迟清除自触发标记，等实时订阅的回调窗口过去后再允许拉取
-    setTimeout(()=>{ sbSelfTriggering = false; }, 1500);
+    // v164: 延迟清除自触发标记，清除后立即触发一次拉取，确保跨设备数据传播
+    setTimeout(()=>{
+      sbSelfTriggering = false;
+      // 自触发窗口关闭后，延迟500ms再拉一次，让云端数据有时间传播
+      setTimeout(()=>{ syncFromSupabase(false); }, 500);
+    }, 1500);
   }
 }
 
@@ -2553,28 +2555,42 @@ async function _sbSyncAdminPwd(pwd){
 let sbChannel = null; // v147: 全局订阅频道引用，用于退出时断开
 function subscribeToSupabaseChanges(){
   if(!sbClient) return;
+  // v164: 先清理旧订阅
+  if(sbChannel){
+    try{ sbClient.removeChannel(sbChannel); }catch(e){}
+    sbChannel = null;
+  }
   const tables = [...Object.values(SB_TABLE_MAP), 'profiles', 'session_dm', 'schedule_dm'];
   let channelName = 'jb-sync-' + Date.now();
-  let channel = sbClient.channel(channelName);
-  sbChannel = channel; // v147: 保存引用以便退出时断开
-  tables.forEach(tableName => {
+  var channel = sbClient.channel(channelName);
+  sbChannel = channel;
+  tables.forEach(function(tableName){
     channel = channel.on('postgres_changes',
       { event: '*', schema: 'public', table: tableName },
-      (payload) => {
+      function(payload){
         console.log('[Supabase] 实时变更:', tableName, payload.eventType);
-        // 去重：延迟1.5秒再拉取，合并短时间内的多次变更
+        // v164: 缩短去重延迟到800ms，加速跨设备传播
         clearTimeout(sbSyncDebounceTimer);
-        sbSyncDebounceTimer = setTimeout(()=>{
+        sbSyncDebounceTimer = setTimeout(function(){
           if(!sbSelfTriggering){
             syncFromSupabase(false);
           }
-        }, 1500);
+        }, 800);
       }
     );
   });
-  channel.subscribe((status) => {
-    if(status === 'SUBSCRIBED') console.log('[Supabase] 实时订阅已启动');
-    else if(status === 'CHANNEL_ERROR') console.warn('[Supabase] 实时订阅出错');
+  channel.subscribe(function(status){
+    if(status === 'SUBSCRIBED'){
+      console.log('[Supabase] 实时订阅已启动，监听', tables.length, '张表');
+    } else if(status === 'CHANNEL_ERROR'){
+      console.warn('[Supabase] 实时订阅出错，依赖轮询同步');
+      // v164: 出错后5秒自动重连一次
+      setTimeout(function(){
+        if(sbClient && sbConnected) subscribeToSupabaseChanges();
+      }, 5000);
+    } else if(status === 'TIMED_OUT'){
+      console.warn('[Supabase] 实时订阅超时，依赖轮询同步');
+    }
   });
 }
 
@@ -6912,11 +6928,11 @@ async function postLoginInit(){
     // 启动实时订阅
     subscribeToSupabaseChanges();
     
-    // 轮询兜底：每10秒拉取一次云端数据
+    // v164: 轮询兜底：每3秒拉取一次云端数据（原10秒太慢）
     if(_pollingInterval) clearInterval(_pollingInterval);
     _pollingInterval = setInterval(()=>{
       if(!document.hidden && sbClient && (adminLoggedIn || currentEmp)) syncFromSupabase(false);
-    }, 10000);
+    }, 3000);
     
     // 切换到前台时立即同步
     if(_visibilityHandler) document.removeEventListener('visibilitychange', _visibilityHandler);
