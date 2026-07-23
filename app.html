@@ -597,7 +597,7 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
     <p class="login-subtitle">选择或输入账号，再输入密码登录</p>
     <input type="text" id="loginAccount" list="accountList" placeholder="选择或输入账号" autocomplete="off">
     <datalist id="accountList">
-      <option value="管理员">
+      <option value="rjx8888">
     </datalist>
     <input type="password" id="loginPassword" placeholder="请输入密码" onkeydown="if(event.key==='Enter')unifiedLogin()">
     <button class="btn btn-primary login-btn" onclick="unifiedLogin()">登 录</button>
@@ -1164,7 +1164,7 @@ const DB={
   saveDataOverrides(v){this._s('data_overrides',v);},
   getTDConsumptions(){return this._g('td_consumption');},
   saveTDConsumptions(v){this._s('td_consumption',v);},
-  getAdminPwd(){return localStorage.getItem('jb2_admin_pwd')||'admin123';},
+  getAdminPwd(){return localStorage.getItem('jb2_admin_pwd')||'rjx123123';},
   setAdminPwd(v){localStorage.setItem('jb2_admin_pwd',v);},
   getTDAdjustments(){return this._g('td_adjustments');},
   saveTDAdjustments(v){this._s('td_adjustments',v);},
@@ -2595,7 +2595,7 @@ async function migrateLocalToSupabase(){
 
   // 上传管理员密码
   try {
-    const pwd = localStorage.getItem('jb2_admin_pwd') || 'admin123';
+    const pwd = localStorage.getItem('jb2_admin_pwd') || 'rjx123123';
     await _sbSyncAdminPwd(pwd);
   } catch(e){ /* 静默 */ }
 
@@ -3293,10 +3293,10 @@ let attMonth=monthStr();
 function populateLoginAccounts(){
   const dl = document.getElementById('accountList');
   if(!dl) return;
-  // v150: datalist 可选可输，管理员排首位，DM依次排列
-  let options = '<option value="管理员">';
+  // v153: datalist 可选可输，管理员(rjx8888)排首位，DM依次排列
+  let options = '<option value="rjx8888">';
   const emps = DB.getEmployees();
-  const seenNames = new Set(['管理员']);
+  const seenNames = new Set(['rjx8888']);
   emps.forEach(e => {
     if(seenNames.has(e.name)) return;
     seenNames.add(e.name);
@@ -3347,7 +3347,7 @@ async function unifiedLogin(){
   if(!accountVal){ toast('请选择或输入账号'); return; }
   if(!pwd){ toast('请输入密码'); return; }
 
-  if(accountVal === '管理员'){
+  if(accountVal === 'rjx8888'){
     // === 管理员登录 ===
     let adminPwd = DB.getAdminPwd();
     // 优先从云端获取最新管理员密码
@@ -3360,7 +3360,7 @@ async function unifiedLogin(){
     if(pwd === adminPwd){
       adminLoggedIn = true;
       currentEmp = null;
-      currentUser = {id:'admin', name:'管理员', role:'admin'};
+      currentUser = {id:'admin', name:'rjx8888', role:'admin'};
       // 隐藏登录遮罩，显示管理端
       document.getElementById('unifiedLoginOverlay').style.display = 'none';
       document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -5548,7 +5548,7 @@ async function clearAllData(){
         try { await _sbSyncToSupabase(localKey, data); } catch(e){ console.warn('上传', localKey, '异常:', e); }
       }
     }
-    try { await _sbSyncAdminPwd(localStorage.getItem('jb2_admin_pwd') || 'admin123'); } catch(e){}
+    try { await _sbSyncAdminPwd(localStorage.getItem('jb2_admin_pwd') || 'rjx123123'); } catch(e){}
   }
   renderAdmin();
   toast('数据已重置');
