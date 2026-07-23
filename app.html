@@ -561,9 +561,51 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
 @keyframes ptrSpin{to{transform:rotate(360deg)}}
 #pullRefreshIndicator.done .ptr-icon{border-color:#4ade80;border-top-color:#4ade80}
 
+/* v146: Unified Login Overlay */
+#unifiedLoginOverlay{
+  position:fixed;top:0;left:0;right:0;bottom:0;
+  background:var(--bg);z-index:10000;
+  display:flex;align-items:center;justify-content:center;
+  padding:20px;
+}
+#unifiedLoginOverlay .login-box{
+  text-align:center;max-width:360px;width:100%;
+}
+#unifiedLoginOverlay .login-box h2{font-size:22px;margin-bottom:6px}
+#unifiedLoginOverlay .login-box .login-subtitle{font-size:13px;color:var(--text2);margin-bottom:24px}
+#unifiedLoginOverlay .login-box select{
+  width:100%;padding:13px;border:1px solid var(--border);border-radius:10px;
+  font-size:16px;background:var(--input);color:var(--text);box-sizing:border-box;
+  appearance:auto;-webkit-appearance:menulist;
+}
+#unifiedLoginOverlay .login-box input[type="password"]{
+  width:100%;padding:13px;border:1px solid var(--border);border-radius:10px;
+  font-size:16px;background:var(--input);color:var(--text);
+  text-align:center;letter-spacing:3px;margin-top:12px;box-sizing:border-box;
+}
+#unifiedLoginOverlay .login-box .login-btn{
+  width:100%;padding:14px;font-size:16px;font-weight:600;margin-top:16px;
+  min-height:48px;
+}
+
 </style>
 </head>
 <body>
+
+<!-- v146: Unified Login Overlay (全屏登录，每次打开必须手动登录) -->
+<div id="unifiedLoginOverlay">
+  <div class="login-box">
+    <h2>&#127917; 剧本杀薪资管理</h2>
+    <p class="login-subtitle">选择账号并输入密码登录</p>
+    <select id="loginAccount">
+      <option value="">请选择账号</option>
+      <option value="__admin__">&#128272; 管理员</option>
+    </select>
+    <input type="password" id="loginPassword" placeholder="请输入密码" onkeydown="if(event.key==='Enter')unifiedLogin()">
+    <button class="btn btn-primary login-btn" onclick="unifiedLogin()">登 录</button>
+  </div>
+</div>
+
 <div id="pullRefreshIndicator"><div class="ptr-icon"></div></div>
 
 <!-- ===== HEADER ===== -->
@@ -571,10 +613,7 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
   <h1>&#127917; 剧本杀薪资管理</h1>
   <div class="subtitle">四种工作类型 &middot; 自动算薪 &middot; 排班考勤 <span id="cloudBadge" class="cloud-badge disconnected" title="未连接云端">☁ 本地</span></div>
 <div id="syncStatus" class="sync-status"></div>
-  <div class="role-switch">
-    <button class="role-btn" onclick="switchRole('admin')">管理端</button>
-    <button class="role-btn active" onclick="switchRole('employee')">员工端</button>
-  </div>
+  <div id="roleIndicator" style="font-size:12px;color:var(--text2);margin-top:6px"></div>
 </div>
 
 <!-- ===== MAIN ===== -->
@@ -712,17 +751,8 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
 
   <!-- Employee Page -->
   <div id="employeePage" class="page active">
-    <div id="empLogin" class="card login-card">
-      <h2>&#128075; 员工登录</h2>
-      <p>选择姓名并输入密码查看薪资</p>
-      <div class="form-group">
-        <select id="empSelect" class="form-group"><option value="">请选择姓名</option></select>
-      </div>
-      <div class="form-group">
-        <input type="password" id="empPwd" placeholder="密码（默认手机后4位）">
-      </div>
-      <button class="btn btn-primary" onclick="empLogin()">进入</button>
-    </div>
+    <!-- v146: 员工登录已移至统一登录页 -->
+    <div id="empLogin" style="display:none"></div>
     <div id="empContent" style="display:none">
       <!-- Employee sub-tabs -->
       <div class="emp-sub-tabs" id="empSubTabs">
@@ -1915,8 +1945,8 @@ async function syncFromSupabase(showToast){
       renderEmpMyData();
       renderEmpScheduleView();
     } else {
-      // 员工未登录时，更新登录页的员工下拉列表
-      renderEmpSelect();
+      // v146: 员工未登录时，更新统一登录页的账号列表
+      if(typeof populateLoginAccounts === 'function') populateLoginAccounts();
     }
     return true;
   } finally {
@@ -2968,51 +2998,187 @@ let salaryDetailEmpId=null;
 let attMonth=monthStr();
 
 // ========================================
-// ROLE SWITCH
+// v146: UNIFIED LOGIN SYSTEM (no auto-login, always require credentials)
 // ========================================
-function switchRole(role){
-  // 会话隔离：切换端时清除对方登录状态
-  document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  if(role==='admin'){
-    // 切到管理端：先清除员工登录状态
-    currentEmp=null;
-    localStorage.removeItem('jb2_currentUser');
-    if(!adminLoggedIn){showAdminLoginModal();return;}
-    document.querySelector('.role-btn:first-child').classList.add('active');
-    document.getElementById('adminPage').classList.add('active');
-    renderAdmin();
-  }else{
-    // 切到员工端：先清除管理员登录状态
-    adminLoggedIn=false;
-    document.querySelector('.role-btn:last-child').classList.add('active');
-    document.getElementById('employeePage').classList.add('active');
-    // 检查员工是否已登录（需要验证会话）
-    const savedUser = localStorage.getItem('jb2_currentUser');
-    if(savedUser){
-      try{
-        const u = JSON.parse(savedUser);
-        const sessionAge = Date.now() - (u.loginTimestamp || 0);
-        const SESSION_TIMEOUT = 24 * 60 * 60 * 1000;
-        if(u && u.role === 'employee' && u.employeeId && sessionAge < SESSION_TIMEOUT){
-          const emp = empById(u.employeeId);
-          if(emp){
-            currentEmp = emp;
-            document.getElementById('empLogin').style.display='none';
-            document.getElementById('empContent').style.display='block';
-            renderEmpPage();
-            return;
-          }
-        }
-        // 会话无效或过期
-        localStorage.removeItem('jb2_currentUser');
-      }catch(e){ localStorage.removeItem('jb2_currentUser'); }
+async function populateLoginAccounts(){
+  const sel = document.getElementById('loginAccount');
+  if(!sel) return;
+  let options = '<option value="">请选择账号</option><option value="__admin__">🔑 管理员</option>';
+  // 从云端获取员工列表
+  if(sbClient){
+    try{
+      const {data:profiles} = await sbClient.from('profiles').select('*').eq('role','employee');
+      if(profiles && profiles.length){
+        const seenNames = new Set();
+        profiles.forEach(p => {
+          if(seenNames.has(p.name)) return;
+          seenNames.add(p.name);
+          options += `<option value="profile_${p.id}">${p.name}</option>`;
+        });
+      }
+    }catch(e){ console.warn('[Auth] 加载profiles失败:',e); }
+  }
+  // 补充本地员工（去重）
+  const emps = DB.getEmployees();
+  const existingNames = new Set();
+  sel.querySelectorAll('option').forEach(o => existingNames.add(o.textContent));
+  emps.forEach(e => {
+    if(!existingNames.has(e.name)){
+      options += `<option value="emp_${e.id}">${e.name}</option>`;
     }
-    // 未登录或会话无效，显示登录界面
-    currentEmp=null;
-    document.getElementById('empLogin').style.display='block';
-    document.getElementById('empContent').style.display='none';
-    renderEmpSelect();
+  });
+  sel.innerHTML = options;
+}
+
+function showUnifiedLogin(){
+  // 隐藏所有内容，显示登录遮罩
+  adminLoggedIn = false;
+  currentEmp = null;
+  currentUser = null;
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  const overlay = document.getElementById('unifiedLoginOverlay');
+  if(overlay){
+    overlay.style.display = 'flex';
+  }
+  // 清空密码框并填充账号列表
+  const pwdInput = document.getElementById('loginPassword');
+  if(pwdInput) pwdInput.value = '';
+  populateLoginAccounts();
+  // 更新角色指示器
+  updateRoleIndicator();
+}
+
+function updateRoleIndicator(){
+  const indicator = document.getElementById('roleIndicator');
+  if(!indicator) return;
+  if(adminLoggedIn){
+    indicator.textContent = '🔑 管理员模式 | 点击退出登录';
+    indicator.style.cursor = 'pointer';
+    indicator.onclick = adminLogout;
+  } else if(currentEmp){
+    indicator.textContent = '👤 ' + currentEmp.name + ' | 点击切换账号';
+    indicator.style.cursor = 'pointer';
+    indicator.onclick = empLogout;
+  } else {
+    indicator.textContent = '';
+    indicator.onclick = null;
+  }
+}
+
+async function unifiedLogin(){
+  if(!saveLock('unifiedLogin')) return;
+  const accountVal = document.getElementById('loginAccount').value;
+  const pwd = document.getElementById('loginPassword').value;
+  if(!accountVal){ toast('请选择账号'); return; }
+  if(!pwd){ toast('请输入密码'); return; }
+
+  if(accountVal === '__admin__'){
+    // === 管理员登录 ===
+    let adminPwd = DB.getAdminPwd();
+    // 优先从云端获取最新管理员密码
+    if(sbClient){
+      try{
+        const {data} = await sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle();
+        if(data && data.value) adminPwd = data.value;
+      }catch(e){ console.warn('[Auth] 读取管理员密码失败:',e); }
+    }
+    if(pwd === adminPwd){
+      adminLoggedIn = true;
+      currentEmp = null;
+      currentUser = {id:'admin', name:'管理员', role:'admin'};
+      // 隐藏登录遮罩，显示管理端
+      document.getElementById('unifiedLoginOverlay').style.display = 'none';
+      document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+      document.getElementById('adminPage').classList.add('active');
+      updateRoleIndicator();
+      renderAdmin();
+      toast('管理员已登录');
+    }else{
+      toast('密码错误');
+      document.getElementById('loginPassword').value = '';
+      document.getElementById('loginPassword').focus();
+    }
+  }else{
+    // === 员工登录 ===
+    let emp = null;
+    let pwdMatch = false;
+
+    if(accountVal.startsWith('profile_')){
+      // 从云端 profiles 验证
+      const profileId = accountVal.replace('profile_','');
+      if(sbClient){
+        try{
+          const {data:profile} = await sbClient.from('profiles').select('*').eq('id',profileId).eq('role','employee').maybeSingle();
+          if(!profile){ toast('账号不存在'); return; }
+          if(profile.password && pwd === profile.password) pwdMatch = true;
+          // 查找关联 employee 记录
+          const {data:empRec} = await sbClient.from('employees').select('*').eq('profile_id',profileId).maybeSingle();
+          if(empRec){
+            emp = DB.getEmployees().find(e=>e.name===profile.name) || empById(empRec.id);
+          }else{
+            emp = DB.getEmployees().find(e=>e.name===profile.name);
+          }
+          if(!pwdMatch && emp){
+            if(emp.password && pwd === emp.password) pwdMatch = true;
+            if(!emp.password){
+              const ph = (emp.phone||'').slice(-4);
+              if(ph && pwd === ph) pwdMatch = true;
+            }
+          }
+          // 如本地无此员工记录，从 profile 创建
+          if(!emp){
+            const emps = DB.getEmployees();
+            const newId = emps.length ? Math.max(...emps.map(e=>e.id))+1 : 1;
+            emp = {id:newId, name:profile.name, phone:profile.phone||'', password:profile.password||'', workType:'full_time', guaranteeLevel:0, hireMonth:'', assessmentPercent:0, accommodationStatus:'none'};
+            emps.push(emp);
+            DB.setEmployees(emps);
+          }
+        }catch(e){
+          console.warn('[Auth] profiles验证失败:',e);
+          toast('登录验证失败，请重试');
+          return;
+        }
+      }
+    }else{
+      // 本地员工验证
+      const empId = parseInt(accountVal.replace('emp_',''));
+      emp = empById(empId);
+      if(emp){
+        if(emp.password && pwd === emp.password) pwdMatch = true;
+        if(!pwdMatch && !emp.password){
+          const ph = (emp.phone||'').slice(-4);
+          if(ph && pwd === ph) pwdMatch = true;
+        }
+        // 也尝试云端验证
+        if(!pwdMatch && sbClient){
+          try{
+            const {data:profile} = await sbClient.from('profiles').select('*').eq('name',emp.name).eq('role','employee').maybeSingle();
+            if(profile && profile.password && pwd === profile.password) pwdMatch = true;
+          }catch(e){}
+        }
+      }
+    }
+
+    if(!emp){ toast('员工不存在'); return; }
+    if(!pwdMatch){
+      toast('密码错误');
+      document.getElementById('loginPassword').value = '';
+      document.getElementById('loginPassword').focus();
+      return;
+    }
+
+    // 员工登录成功
+    currentEmp = emp;
+    adminLoggedIn = false;
+    // 隐藏登录遮罩，显示员工端
+    document.getElementById('unifiedLoginOverlay').style.display = 'none';
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+    document.getElementById('employeePage').classList.add('active');
+    document.getElementById('empLogin').style.display = 'none';
+    document.getElementById('empContent').style.display = 'block';
+    updateRoleIndicator();
+    renderEmpPage();
+    toast('欢迎回来，' + emp.name);
   }
 }
 
@@ -5638,151 +5804,14 @@ let empViewMonth=monthStr();
 let empCurrentTab=0;
 let empSchSelectedDate='';
 
-async function renderEmpSelect(){
-  const select=document.getElementById('empSelect');
-  // 先用本地数据快速填充
-  const emps=DB.getEmployees();
-  select.innerHTML='<option value="">请选择</option>'+emps.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
-  // 异步尝试从云端更新
-  if(sbClient){
-    try{
-      const{data:profiles}=await sbClient.from('profiles').select('*').eq('role','employee');
-      if(profiles&&profiles.length){
-        const seenNames=new Set();
-        select.innerHTML='<option value="">请选择</option>';
-        profiles.forEach(p=>{
-          if(seenNames.has(p.name))return;
-          seenNames.add(p.name);
-          const opt=document.createElement('option');
-          opt.value='profile_'+p.id;
-          opt.textContent=p.name;
-          select.appendChild(opt);
-        });
-      }
-    }catch(e){console.warn('[Auth] 加载profiles失败:',e);}
-  }
-}
-
-async function empLogin(){
-  // 防抖：防止快速多次点击
-  if(!saveLock('empLogin')) return;
-  const selVal=document.getElementById('empSelect').value;
-  const pwd=document.getElementById('empPwd').value;
-  if(!selVal){toast('请选择姓名');return;}
-  if(!pwd){toast('请输入密码');return;}
-  // 会话隔离：员工登录时清除管理员登录状态
-  adminLoggedIn=false;
-
-  let emp=null;
-  let profileId=null;
-  let employeeId=null;
-
-  // 尝试从 Supabase profiles 表验证
-  if(sbClient&&selVal.startsWith('profile_')){
-    profileId=selVal.replace('profile_','');
-    try{
-      const{data:profile,error}=await sbClient.from('profiles').select('*').eq('id',profileId).eq('role','employee').maybeSingle();
-      if(error||!profile){toast('密码错误或账号不存在');return;}
-      // 验证密码：优先用 profiles 表的 password，否则回退到 employees 表
-      let pwdMatch=false;
-      if(profile.password&&pwd===profile.password){pwdMatch=true;}
-      // 查找关联的 employee 记录
-      const{data:empRec}=await sbClient.from('employees').select('*').eq('profile_id',profileId).maybeSingle();
-      if(empRec){
-        // 用 name 查找本地员工（云端没有 local_id 列）
-        emp=DB.getEmployees().find(e=>e.name===profile.name);
-        if(!emp){
-          // 兜底：用 cloud UUID 查找
-          emp=empById(empRec.id);
-        }
-        employeeId=emp?emp.id:0;
-        if(!pwdMatch&&emp){
-          // 回退验证：用 employees 表的密码
-          if(emp.password&&pwd===emp.password)pwdMatch=true;
-          if(!emp.password){
-            const ph=(emp.phone||'').slice(-4);
-            if(ph&&pwd===ph)pwdMatch=true;
-          }
-        }
-      }else{
-        // 没有关联的 employee，尝试用 name 匹配
-        emp=DB.getEmployees().find(e=>e.name===profile.name);
-        if(emp)employeeId=emp.id;
-        if(!pwdMatch&&emp){
-          if(emp.password&&pwd===emp.password)pwdMatch=true;
-          if(!emp.password){
-            const ph2=(emp.phone||'').slice(-4);
-            if(ph2&&pwd===ph2)pwdMatch=true;
-          }
-        }
-      }
-      if(!pwdMatch){toast('密码错误');return;}
-      // 如果密码匹配但没找到本地员工记录，从 profile 创建一条本地员工记录
-      if(!emp){
-        const emps=DB.getEmployees();
-        const newId=emps.length?Math.max(...emps.map(e=>e.id))+1:1;
-        emp={id:newId,name:profile.name,phone:profile.phone||'',password:profile.password||'',workType:'full_time',guaranteeLevel:0,hireMonth:'',assessmentPercent:0,accommodationStatus:'none'};
-        emps.push(emp);
-        DB.setEmployees(emps);
-        employeeId=newId;
-        console.log('[Auth] 从profile自动创建本地员工记录:',emp.name,'id=',newId);
-      }
-    }catch(e){
-      console.warn('[Auth] profiles验证失败:',e);
-      toast('登录验证失败，请重试');
-      return;
-    }
-  }else{
-    // 回退到本地 employees 表验证
-    const id=parseInt(selVal);
-    if(!id){toast('请选择姓名');return;}
-    emp=empById(id);
-    if(!emp){toast('员工不存在');return;}
-    employeeId=emp.id;
-    if(emp.password&&pwd!==emp.password){toast('密码错误');return;}
-    if(!emp.password){
-      const phoneSuffix=(emp.phone||'').slice(-4);
-      if(!phoneSuffix){toast('该员工未设置密码和手机号，请先在管理端设置');return;}
-      if(pwd!==phoneSuffix){toast('密码错误（默认手机后4位）');return;}
-    }
-  }
-
-  currentEmp=emp;
-  // 如果管理员已登录，不覆盖 currentUser
-  if(!adminLoggedIn){
-    currentUser={
-      id:profileId||('emp_'+employeeId),
-      name:emp?emp.name:'员工',
-      role:'employee',
-      profileId:profileId,
-      employeeId:employeeId
-    };
-    currentUser.loginTimestamp = Date.now();
-    localStorage.setItem('jb2_currentUser',JSON.stringify(currentUser));
-  }
-  empViewDate=todayStr();
-  empViewMonth=monthStr();
-  empCurrentTab=0;
-  empSchSelectedDate='';
-  document.getElementById('empLogin').style.display='none';
-  document.getElementById('empContent').style.display='block';
-  // Reset sub-tabs
-  document.querySelectorAll('#empSubTabs .emp-sub-tab').forEach((t,i)=>t.classList.toggle('active',i===0));
-  document.querySelectorAll('.etab').forEach((t,i)=>t.style.display=i===0?'block':'none');
-  renderEmpPage();
-  toast('欢迎回来，'+(emp?emp.name:''));
-}
+// v146: renderEmpSelect and empLogin removed - replaced by populateLoginAccounts and unifiedLogin
 
 function empLogout(){
   currentEmp=null;
-  // 如果管理员已登录，不清除状态
-  if(!adminLoggedIn){
-    currentUser=null;
-    localStorage.removeItem('jb2_currentUser');
-  }
-  document.getElementById('empLogin').style.display='block';
-  document.getElementById('empContent').style.display='none';
-  document.getElementById('empPwd').value='';
+  adminLoggedIn=false;
+  currentUser=null;
+  // v146: 退出后显示统一登录页
+  showUnifiedLogin();
 }
 
 function switchEmpTab(idx,el){
@@ -6434,34 +6463,8 @@ function showInstallGuide(){
     });
   }
   
-  // 6. 渲染默认界面（默认显示员工端登录）
-  // 先强制清除所有 active，再切换到员工端
-  document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('active'));
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  // 恢复员工登录状态（需要带时间戳验证，超过24小时需重新登录）
-  const savedUser = localStorage.getItem('jb2_currentUser');
-  if(savedUser){
-    try{
-      const u = JSON.parse(savedUser);
-      const sessionAge = Date.now() - (u.loginTimestamp || 0);
-      const SESSION_TIMEOUT = 24 * 60 * 60 * 1000; // 24小时过期
-      if(u && u.role === 'employee' && u.employeeId && sessionAge < SESSION_TIMEOUT){
-        const emp = empById(u.employeeId);
-        if(emp){
-          currentEmp = emp;
-          document.getElementById('empLogin').style.display='none';
-          document.getElementById('empContent').style.display='block';
-        } else {
-          // 员工不存在了，清除会话
-          localStorage.removeItem('jb2_currentUser');
-        }
-      } else if(sessionAge >= SESSION_TIMEOUT){
-        // 会话过期，清除
-        localStorage.removeItem('jb2_currentUser');
-      }
-    }catch(e){ localStorage.removeItem('jb2_currentUser'); }
-  }
-  switchRole('employee');
+  // 6. v146: 显示统一登录页（禁止自动登录，每次必须手动输入密码）
+  showUnifiedLogin();
   setTimeout(showInstallGuide, 3000);
 })();
 
@@ -6469,10 +6472,11 @@ function showInstallGuide(){
 function adminLogout(){
   adminLoggedIn=false;
   currentUser=null;
+  currentEmp=null;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  // v146: 退出后显示统一登录页
+  showUnifiedLogin();
   toast('已退出登录');
-  // 重新显示登录框
-  switchRole('employee');
 }
 
 // ========================================
@@ -6521,48 +6525,7 @@ async function migrateEmployeesToProfiles(){
   toast('迁移完成：新建'+created+'个，跳过'+skipped+'个');
 }
 
-// ========================================
-// ADMIN LOGIN MODAL
-// ========================================
-function showAdminLoginModal(){
-  const modal=document.getElementById('adminLoginModal');
-  const input=document.getElementById('adminPwdInput');
-  input.value='';
-  modal.classList.add('show');
-  setTimeout(()=>input.focus(),300);
-}
-function hideAdminLoginModal(){document.getElementById('adminLoginModal').classList.remove('show');}
-async function submitAdminLogin(){
-  const input=document.getElementById('adminPwdInput');
-  const pwd=input.value;
-  if(!pwd){toast('请输入密码');return;}
-  // 会话隔离：管理员登录时清除员工登录状态
-  currentEmp=null;
-  localStorage.removeItem('jb2_currentUser');
-  // 从 settings 表获取管理员密码
-  let adminPwd=DB.getAdminPwd(); // 本地默认
-  if(sbClient){
-    try{
-      const{data}=await sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle();
-      if(data&&data.value)adminPwd=data.value;
-    }catch(e){console.warn('[Auth] 读取管理员密码失败:',e);}
-  }
-  if(pwd===adminPwd){
-    adminLoggedIn=true;
-    currentUser={id:'admin',name:'管理员',role:'admin'};
-    hideAdminLoginModal();
-    document.querySelector('.role-btn:first-child').classList.add('active');
-    document.querySelector('.role-btn:last-child').classList.remove('active');
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    document.getElementById('adminPage').classList.add('active');
-    renderAdmin();
-    toast('管理员已登录');
-  }else{
-    toast('密码错误');
-    input.value='';
-    input.focus();
-  }
-}
+// v146: showAdminLoginModal/hideAdminLoginModal/submitAdminLogin removed - unified login overlay handles all login
 
 function deleteConsumption(id){
   if(!canOperate()){toast('请先登录');return;}
@@ -6973,20 +6936,6 @@ function renderRechargeList(){
 })();
 </script>
 
-<!-- ===== ADMIN LOGIN MODAL ===== -->
-<div class="modal-overlay" id="adminLoginModal">
-  <div class="modal-sheet" style="max-width:360px;margin:auto;padding-bottom:40px">
-    <div class="modal-handle"></div>
-    <div class="modal-header"><h3>&#128272; 管理员登录</h3><button class="modal-close" onclick="hideAdminLoginModal()">&times;</button></div>
-    <div style="padding:0 4px 8px">
-      <div class="form-group">
-        <label>请输入管理密码</label>
-        <input type="password" id="adminPwdInput" placeholder="默认密码：admin123" style="text-align:center;font-size:16px;letter-spacing:4px" onkeydown="if(event.key==='Enter')submitAdminLogin()">
-      </div>
-      <button class="btn btn-primary" onclick="submitAdminLogin()" style="margin-top:8px">确认登录</button>
-      <div style="text-align:center;font-size:11px;color:var(--text2);margin-top:10px">默认密码 admin123，可在管理端修改</div>
-    </div>
-  </div>
-</div>
+<!-- v146: adminLoginModal removed - login now handled by unified overlay -->
 </body>
 </html>
