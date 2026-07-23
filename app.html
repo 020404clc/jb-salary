@@ -1172,6 +1172,10 @@ const DB={
   saveTDAdjustments(v){this._s('td_adjustments',v);},
   getRecharges(){return this._g('recharges');},
   saveRecharges(v){this._s('recharges',v);},
+  getSalarySettlements(){return this._g('salary_settlements');},
+  saveSalarySettlements(v){this._s('salary_settlements',v);},
+  getSalaryChangeLogs(){return this._g('salary_change_logs');},
+  saveSalaryChangeLogs(v){this._s('salary_change_logs',v);}
   // ========== Supabase Sync Hooks ==========
   _supabaseSync(table, data){
     // 异步写入 Supabase，不阻塞 UI
@@ -1280,7 +1284,9 @@ const SB_TABLE_MAP = {
   'schedules': 'schedules',
   'ratio_overrides': 'ratio_overrides',
   'data_overrides': 'data_overrides',
-  'recharges': 'recharges'
+  'recharges': 'recharges',
+  'salary_settlements': 'salary_settlements',
+  'salary_change_logs': 'salary_change_logs'
 };
 
 // ---------- 字段映射配置 ----------
@@ -1296,7 +1302,9 @@ const SB_FIELD_MAP = {
   schedules: { scriptId:'script_id', expectedTime:'time', playerCount:'player_count', sessionType:'session_type' },
   ratio_overrides: { employeeId:'employee_id', scriptId:'script_id', runCountOverride:'run_count_override', groupPercentOverride:'group_percent_override' },
   data_overrides: { employeeId:'employee_id', monthlyCarTripsOverride:'monthly_car_trips_override', overrideMonth:'override_month', groupPercentOverride:'group_percent_override' },
-  recharges: { dmId:'dm_id' }
+  recharges: { dmId:'dm_id' },
+  salary_settlements: { settledAt:'settled_at', settledBy:'settled_by' },
+  salary_change_logs: { employeeId:'employee_id', employeeName:'employee_name', changeType:'change_type', changedAt:'changed_at', changedBy:'changed_by', beforeData:'before_data', afterData:'after_data' }
 };
 
 // ---------- 工具函数 ----------
@@ -1796,7 +1804,7 @@ async function syncFromSupabase(showToast){
     } catch(e){ console.warn('[Supabase] 拉取 schedules 异常:', e); failCount++; }
 
     // --- 4. 同步简单表（直接映射）---
-    const simpleTables = ['scripts','attendance','td_exchanges','td_consumption','td_adjustments','ratio_overrides','data_overrides','recharges'];
+    const simpleTables = ['scripts','attendance','td_exchanges','td_consumption','td_adjustments','ratio_overrides','data_overrides','recharges','salary_settlements','salary_change_logs'];
     for(const localKey of simpleTables){
       const tableName = SB_TABLE_MAP[localKey];
       // 跳过脏表（本地刚保存，上传可能还没完成，不能覆盖）
@@ -1895,6 +1903,66 @@ async function syncFromSupabase(showToast){
             const doLocalOnly = existingLocalDO.filter(r => r.id !== undefined && r.id !== null && !doCloudIds.has(r.id));
             const finalDO = mergedData.concat(doLocalOnly);
             localStorage.setItem('jb2_' + localKey, JSON.stringify(finalDO));
+            successCount++;
+            continue;
+          }
+          // v148: salary_settlements 特殊处理（snapshot 是 JSON 字段）
+          if(localKey === 'salary_settlements'){
+            const mergedData = [];
+            data.forEach(row => {
+              const local = {
+                id: row.local_id || row.id,
+                month: row.month,
+                settledAt: row.settled_at || row.settledAt,
+                settledBy: row.settled_by || row.settledBy || 'admin',
+                snapshot: row.snapshot
+              };
+              // 如果 snapshot 是字符串，解析为对象
+              if(typeof local.snapshot === 'string'){
+                try { local.snapshot = JSON.parse(local.snapshot); } catch(e){}
+              }
+              mergedData.push(local);
+            });
+            // 合并策略：云端数据优先，保留本地未同步记录
+            const existingLocal = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
+            const cloudIds = new Set(mergedData.filter(r => r.id !== undefined && r.id !== null).map(r => r.id));
+            const localOnly = existingLocal.filter(r => r.id !== undefined && r.id !== null && !cloudIds.has(r.id));
+            const finalData = mergedData.concat(localOnly);
+            localStorage.setItem('jb2_' + localKey, JSON.stringify(finalData));
+            successCount++;
+            continue;
+          }
+          // v148: salary_change_logs 特殊处理（beforeData/afterData 是 JSON 字段）
+          if(localKey === 'salary_change_logs'){
+            const mergedData = [];
+            data.forEach(row => {
+              const local = {
+                id: row.local_id || row.id,
+                month: row.month,
+                employeeId: empIdReverseMap[row.employee_id] || row.employee_id || row.employeeId,
+                employeeName: row.employee_name || row.employeeName,
+                changeType: row.change_type || row.changeType,
+                description: row.description,
+                beforeData: row.before_data || row.beforeData,
+                afterData: row.after_data || row.afterData,
+                changedAt: row.changed_at || row.changedAt,
+                changedBy: row.changed_by || row.changedBy || 'admin'
+              };
+              // 如果 JSON 字段是字符串，解析为对象
+              if(typeof local.beforeData === 'string'){
+                try { local.beforeData = JSON.parse(local.beforeData); } catch(e){}
+              }
+              if(typeof local.afterData === 'string'){
+                try { local.afterData = JSON.parse(local.afterData); } catch(e){}
+              }
+              mergedData.push(local);
+            });
+            // 合并策略：云端数据优先，保留本地未同步记录
+            const existingLocal = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
+            const cloudIds = new Set(mergedData.filter(r => r.id !== undefined && r.id !== null).map(r => r.id));
+            const localOnly = existingLocal.filter(r => r.id !== undefined && r.id !== null && !cloudIds.has(r.id));
+            const finalData = mergedData.concat(localOnly);
+            localStorage.setItem('jb2_' + localKey, JSON.stringify(finalData));
             successCount++;
             continue;
           }
@@ -2900,6 +2968,16 @@ function getWorkTimeAdjustments(empId,date){
 }
 
 function calcMonthlySalary(empId,month){
+  // v148: 如果月份已结算，优先使用快照数据
+  const settlement=getSettlement(month);
+  if(settlement){
+    const snapshotEmp=settlement.employees.find(e=>e.employeeId===empId);
+    if(snapshotEmp){
+      console.log('[calcMonthlySalary] 使用结算快照, empId='+empId+', month='+month);
+      return snapshotEmp.salaryDetail;
+    }
+  }
+  
   const emp=empById(empId);
   if(!emp){console.log('[calcMonthlySalary] 未找到员工, empId='+empId);return null;}
   console.log('[calcMonthlySalary] 开始计算, empId='+empId+', name='+emp.name+', workType='+emp.workType+', normalized='+getNormWorkType(emp));
@@ -2979,6 +3057,180 @@ function calcAttendanceDeduction(empId,month){
   att.forEach(a=>{if(a.status==='absent')deduct+=600;});
   return deduct;
 }
+
+// ========================================
+// 月度薪资结算功能 (v148 新增)
+// ========================================
+
+/**
+ * 检查指定月份是否已结算
+ * @param {string} month - 月份字符串，格式 'YYYY-MM'
+ * @returns {boolean}
+ */
+function isMonthSettled(month){
+  const settlements=DB.getSalarySettlements();
+  return settlements.some(s=>s.month===month);
+}
+
+/**
+ * 获取指定月份的结算记录
+ * @param {string} month - 月份字符串，格式 'YYYY-MM'
+ * @returns {Object|null}
+ */
+function getSettlement(month){
+  const settlements=DB.getSalarySettlements();
+  return settlements.find(s=>s.month===month)||null;
+}
+
+/**
+ * 执行月度薪资结算
+ * @param {string} month - 月份字符串，格式 'YYYY-MM'
+ * @returns {Object} - {success: boolean, message: string}
+ */
+function settleMonth(month){
+  // 1. 检查是否已结算
+  if(isMonthSettled(month)){
+    return {success:false, message:'该月份已结算，不可重复结算'};
+  }
+  
+  // 2. 生成当月薪资快照
+  const emps=DB.getEmployees();
+  if(!emps||!emps.length){
+    return {success:false, message:'无员工数据，无法结算'};
+  }
+  
+  const snapshot={
+    month:month,
+    settledAt:new Date().toISOString(),
+    settledBy:'admin',
+    employees:[]
+  };
+  
+  emps.forEach(emp=>{
+    const salaryData=calcMonthlySalary(emp.id,month);
+    if(salaryData){
+      snapshot.employees.push({
+        employeeId:emp.id,
+        employeeName:emp.name,
+        workType:emp.workType,
+        salaryDetail:salaryData
+      });
+    }
+  });
+  
+  // 3. 保存结算记录
+  const settlements=DB.getSalarySettlements();
+  settlements.push(snapshot);
+  DB.saveSalarySettlements(settlements);
+  
+  console.log('[Settlement] 月度结算完成:',month,'员工数:',snapshot.employees.length);
+  return {success:true, message:`${month} 薪资已结算，共${snapshot.employees.length}名员工`};
+}
+
+/**
+ * 获取已结算月份的薪资数据（只读快照）
+ * @param {string} month - 月份字符串，格式 'YYYY-MM'
+ * @returns {Array|null} - 员工薪资快照数组
+ */
+function getSettledSalaryData(month){
+  const settlement=getSettlement(month);
+  if(!settlement)return null;
+  return settlement.employees;
+}
+
+/**
+ * 检查当前月份是否处于只读模式（已结算）
+ * @returns {boolean}
+ */
+function isCurrentMonthReadOnly(){
+  return isMonthSettled(salaryMonth);
+}
+
+// ========================================
+// 薪资变更日志功能 (v148 新增)
+// ========================================
+
+/**
+ * 记录薪资变更日志
+ * @param {string} month - 月份
+ * @param {number} empId - 员工ID
+ * @param {string} empName - 员工姓名
+ * @param {string} changeType - 变更类型：'field_edit'|'amount_adjust'|'override'
+ * @param {string} description - 变更描述
+ * @param {Object} beforeData - 变更前数据
+ * @param {Object} afterData - 变更后数据
+ */
+function addSalaryChangeLog(month, empId, empName, changeType, description, beforeData, afterData){
+  const logs=DB.getSalaryChangeLogs();
+  logs.push({
+    id: Date.now(),
+    month: month,
+    employeeId: empId,
+    employeeName: empName,
+    changeType: changeType,
+    description: description,
+    beforeData: beforeData,
+    afterData: afterData,
+    changedAt: new Date().toISOString(),
+    changedBy: 'admin'
+  });
+  DB.saveSalaryChangeLogs(logs);
+  console.log('[ChangeLog] 记录变更:', month, empName, changeType);
+}
+
+/**
+ * 获取指定月份的变更日志
+ * @param {string} month - 月份
+ * @param {number} empId - 员工ID（可选）
+ * @returns {Array}
+ */
+function getSalaryChangeLogs(month, empId){
+  let logs=DB.getSalaryChangeLogs();
+  if(month)logs=logs.filter(l=>l.month===month);
+  if(empId)logs=logs.filter(l=>l.employeeId===empId);
+  return logs.sort((a,b)=>b.changedAt.localeCompare(a.changedAt));
+}
+
+/**
+ * 确认并执行月度结算
+ */
+function confirmSettleMonth(){
+  const month=salaryMonth;
+  const emps=DB.getEmployees();
+  const monthSessions=DB.getSessions().filter(s=>s.date.startsWith(month));
+  
+  // 计算总薪资预览
+  let totalSalary=0;
+  emps.forEach(emp=>{
+    const r=calcMonthlySalary(emp.id,month);
+    if(r)totalSalary+=r.total;
+  });
+  
+  const confirmMsg=`确定要结算 ${month} 的薪资吗？\n\n`+
+    `• 员工数: ${emps.length} 人\n`+
+    `• 场次: ${monthSessions.length} 场\n`+
+    `• 总薪资: ¥${roundTo(totalSalary,1)}\n\n`+
+    `结算后：\n`+
+    `✓ 生成薪资快照存档\n`+
+    `✓ 数据锁定为只读状态\n`+
+    `✓ 后续变更不影响已结算数据\n\n`+
+    `此操作不可撤销！`;
+  
+  if(confirm(confirmMsg)){
+    const result=settleMonth(month);
+    if(result.success){
+      toast('✓ '+result.message);
+      renderSalaryOverview();
+      // 触发云端同步
+      if(sbClient && sbConnected){
+        setTimeout(()=>{syncFromSupabase(false);},500);
+      }
+    }else{
+      toast('✗ '+result.message);
+    }
+  }
+}
+
 
 function monthDiff(m1,m2){
   if(!m1||!m2)return 0;
@@ -3731,6 +3983,48 @@ function renderSalarySummary(){
       <div style="color:var(--text2)">DM人数</div>
     </div>
   </div>`;
+  
+  // v148: 结算状态和操作按钮
+  const isSettled=isMonthSettled(salaryMonth);
+  const settlement=isSettled?getSettlement(salaryMonth):null;
+  let settlementHtml='';
+  if(isSettled){
+    // 已结算状态显示
+    settlementHtml=`<div class="card" style="padding:10px 12px;background:linear-gradient(135deg,rgba(76,175,80,.1),rgba(76,175,80,.05));border:1px solid var(--success)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="font-size:18px">✓</span>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600;color:var(--success)">本月已结算</div>
+          <div style="font-size:10px;color:var(--text2);margin-top:2px">
+            结算时间: ${new Date(settlement.settledAt).toLocaleString('zh-CN')}<br>
+            共 ${settlement.employees.length} 名员工 · 数据已锁定为只读
+          </div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--text2);padding:6px;background:var(--card2);border-radius:6px;margin-top:6px">
+        💡 已结算月份的薪资数据为快照存档，不受后续数据变更影响。如需调整请联系管理员。
+      </div>
+    </div>`;
+  }else{
+    // 未结算状态显示结算按钮
+    settlementHtml=`<div class="card" style="padding:10px 12px;background:linear-gradient(135deg,rgba(255,152,0,.1),rgba(255,152,0,.05));border:1px solid var(--warn)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:18px">⚠</span>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600;color:var(--warn)">本月未结算</div>
+          <div style="font-size:10px;color:var(--text2);margin-top:2px">
+            核对无误后点击下方按钮完成结算<br>
+            结算后数据将锁定为只读状态
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="confirmSettleMonth()" style="background:var(--warn);font-size:13px">
+        ✓ 结算完毕（${salaryMonth}）
+      </button>
+    </div>`;
+  }
+  
+  header+=settlementHtml;
 
   // Build per-DM salary data
   const dmSalaryData=emps.map(e=>{
@@ -4968,6 +5262,12 @@ function editSession(id){openSessionModal(id);}
 
 function saveSession(){
   if(!canOperate()){toast('请先登录');return;}
+  // v148: 检查当前月份是否已结算
+  const sessionDate=document.getElementById('s_date').value;
+  if(sessionDate&&isMonthSettled(sessionDate.substring(0,7))){
+    toast('该月份已结算，无法编辑场次数据');
+    return;
+  }
   if(!saveLock('session')){toast('请勿重复提交');return;}
   // 员工只能保存自己录入的场次
   if(!isAdmin()&&currentEmp){document.getElementById('s_createdBy').value=currentEmp.id;}
