@@ -4052,29 +4052,33 @@ function renderSalarySummary(){
   const settlement=isSettled?getSettlement(salaryMonth):null;
   let settlementHtml='';
   if(isSettled){
-    // v151: 已结算状态显示，紧凑靠右布局
-    settlementHtml=`<div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <div style="background:linear-gradient(135deg,rgba(76,175,80,.12),rgba(76,175,80,.04));border:1px solid var(--success);border-radius:10px;padding:10px 14px;max-width:240px;text-align:right">
-        <div style="display:flex;align-items:center;justify-content:flex-end;gap:6px">
-          <span style="font-size:14px">✓</span>
-          <span style="font-size:13px;font-weight:600;color:var(--success)">已结算 ${salaryMonth}</span>
+    // v151→v162: 已结算状态显示，扩大操作区
+    settlementHtml=`<div style="margin-bottom:10px">
+      <div style="background:linear-gradient(135deg,rgba(76,175,80,.12),rgba(76,175,80,.04));border:1px solid var(--success);border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:16px">✓</span>
+            <span style="font-size:14px;font-weight:600;color:var(--success)">已结算 ${salaryMonth}</span>
+          </div>
+          <div style="font-size:10px;color:var(--text2);margin-top:4px">${new Date(settlement.settledAt).toLocaleString('zh-CN')} · ${settlement.employees.length}名员工</div>
         </div>
-        <div style="font-size:9px;color:var(--text2);margin-top:3px">${new Date(settlement.settledAt).toLocaleString('zh-CN')} · ${settlement.employees.length}名员工</div>
-        <button class="btn btn-sm" onclick="confirmSettleMonth()" style="background:var(--text2);color:#fff;font-size:11px;margin-top:6px;padding:5px 12px;width:auto;border-radius:6px">
+        <button class="btn btn-sm" onclick="confirmSettleMonth()" style="background:var(--text2);color:#fff;font-size:12px;padding:8px 16px;width:auto;border-radius:8px;white-space:nowrap">
           🔓 解锁修改
         </button>
       </div>
     </div>`;
   }else{
-    // v151: 未结算状态显示结算按钮，紧凑靠右布局
-    settlementHtml=`<div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <div style="background:linear-gradient(135deg,rgba(255,152,0,.12),rgba(255,152,0,.04));border:1px solid var(--warn);border-radius:10px;padding:10px 14px;max-width:240px;text-align:right">
-        <div style="display:flex;align-items:center;justify-content:flex-end;gap:6px">
-          <span style="font-size:14px">⚠</span>
-          <span style="font-size:13px;font-weight:600;color:var(--warn)">未结算</span>
+    // v151→v162: 未结算状态显示结算按钮，扩大操作区
+    settlementHtml=`<div style="margin-bottom:10px">
+      <div style="background:linear-gradient(135deg,rgba(255,152,0,.12),rgba(255,152,0,.04));border:1px solid var(--warn);border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:16px">⚠</span>
+            <span style="font-size:14px;font-weight:600;color:var(--warn)">未结算</span>
+          </div>
+          <div style="font-size:10px;color:var(--text2);margin-top:4px">核对后点击结算固化数据</div>
         </div>
-        <div style="font-size:9px;color:var(--text2);margin-top:3px">核对后点击结算固化数据</div>
-        <button class="btn btn-sm" onclick="confirmSettleMonth()" style="background:var(--warn);color:#fff;font-size:11px;margin-top:6px;padding:5px 12px;width:auto;border-radius:6px">
+        <button class="btn btn-sm" onclick="confirmSettleMonth()" style="background:var(--warn);color:#fff;font-size:12px;padding:8px 16px;width:auto;border-radius:8px;white-space:nowrap">
           ✓ 结算完毕
         </button>
       </div>
