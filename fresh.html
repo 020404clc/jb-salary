@@ -3088,24 +3088,19 @@ function getSettlement(month){
  * @returns {Object} - {success: boolean, message: string}
  */
 function settleMonth(month){
-  // 1. 检查是否已结算
   if(isMonthSettled(month)){
     return {success:false, message:'该月份已结算，不可重复结算'};
   }
-  
-  // 2. 生成当月薪资快照
   const emps=DB.getEmployees();
   if(!emps||!emps.length){
     return {success:false, message:'无员工数据，无法结算'};
   }
-  
   const snapshot={
     month:month,
     settledAt:new Date().toISOString(),
     settledBy:'admin',
     employees:[]
   };
-  
   emps.forEach(emp=>{
     const salaryData=calcMonthlySalary(emp.id,month);
     if(salaryData){
@@ -3117,14 +3112,31 @@ function settleMonth(month){
       });
     }
   });
-  
-  // 3. 保存结算记录
   const settlements=DB.getSalarySettlements();
   settlements.push(snapshot);
   DB.saveSalarySettlements(settlements);
-  
   console.log('[Settlement] 月度结算完成:',month,'员工数:',snapshot.employees.length);
   return {success:true, message:`${month} 薪资已结算，共${snapshot.employees.length}名员工`};
+}
+
+/**
+ * v149: 解锁已结算月份，移除结算记录，允许重新编辑
+ * @param {string} month - 月份字符串，格式 'YYYY-MM'
+ * @returns {Object} - {success: boolean, message: string}
+ */
+function unlockMonth(month){
+  if(!isMonthSettled(month)){
+    return {success:false, message:'该月份尚未结算，无需解锁'};
+  }
+  let settlements=DB.getSalarySettlements();
+  const before=settlements.length;
+  settlements=settlements.filter(s=>s.month!==month);
+  DB.saveSalarySettlements(settlements);
+  console.log('[Settlement] 月度解锁完成:',month,'移除结算记录');
+  if(settlements.length<before){
+    return {success:true, message:`${month} 已解锁，可以编辑场次数据`};
+  }
+  return {success:false, message:'解锁失败，未找到结算记录'};
 }
 
 /**
@@ -3192,41 +3204,62 @@ function getSalaryChangeLogs(month, empId){
 }
 
 /**
- * 确认并执行月度结算
+ * v149: 结算/解锁切换函数
+ * 未结算→结算，已结算→解锁
  */
 function confirmSettleMonth(){
   const month=salaryMonth;
-  const emps=DB.getEmployees();
-  const monthSessions=DB.getSessions().filter(s=>s.date.startsWith(month));
-  
-  // 计算总薪资预览
-  let totalSalary=0;
-  emps.forEach(emp=>{
-    const r=calcMonthlySalary(emp.id,month);
-    if(r)totalSalary+=r.total;
-  });
-  
-  const confirmMsg=`确定要结算 ${month} 的薪资吗？\n\n`+
-    `• 员工数: ${emps.length} 人\n`+
-    `• 场次: ${monthSessions.length} 场\n`+
-    `• 总薪资: ¥${roundTo(totalSalary,1)}\n\n`+
-    `结算后：\n`+
-    `✓ 生成薪资快照存档\n`+
-    `✓ 数据锁定为只读状态\n`+
-    `✓ 后续变更不影响已结算数据\n\n`+
-    `此操作不可撤销！`;
-  
-  if(confirm(confirmMsg)){
-    const result=settleMonth(month);
-    if(result.success){
-      toast('✓ '+result.message);
-      renderSalaryOverview();
-      // 触发云端同步
-      if(sbClient && sbConnected){
-        setTimeout(()=>{syncFromSupabase(false);},500);
+  const settled=isMonthSettled(month);
+  if(settled){
+    // 已结算→解锁
+    const settlement=getSettlement(month);
+    const empCount=settlement?settlement.employees.length:0;
+    const confirmMsg=`确定要解锁 ${month} 的薪资吗？\n\n`+
+      `当前有 ${empCount} 名员工的快照数据。\n`+
+      `解锁后：\n`+
+      `• 可重新编辑该月份场次数据\n`+
+      `• 薪资快照将被清除\n`+
+      `• 修改完成后需再次点击结算`;
+    if(confirm(confirmMsg)){
+      const result=unlockMonth(month);
+      if(result.success){
+        toast('✓ '+result.message);
+        renderSalaryOverview();
+        if(sbClient && sbConnected){
+          setTimeout(()=>{syncFromSupabase(false);},500);
+        }
+      }else{
+        toast('✗ '+result.message);
       }
-    }else{
-      toast('✗ '+result.message);
+    }
+  }else{
+    // 未结算→结算
+    const emps=DB.getEmployees();
+    const monthSessions=DB.getSessions().filter(s=>s.date.startsWith(month));
+    let totalSalary=0;
+    emps.forEach(emp=>{
+      const r=calcMonthlySalary(emp.id,month);
+      if(r)totalSalary+=r.total;
+    });
+    const confirmMsg=`确定要结算 ${month} 的薪资吗？\n\n`+
+      `• 员工数: ${emps.length} 人\n`+
+      `• 场次: ${monthSessions.length} 场\n`+
+      `• 总薪资: ¥${roundTo(totalSalary,1)}\n\n`+
+      `结算后：\n`+
+      `✓ 生成薪资快照存档\n`+
+      `✓ 数据锁定为只读状态\n`+
+      `✓ 后续变更不影响已结算数据`;
+    if(confirm(confirmMsg)){
+      const result=settleMonth(month);
+      if(result.success){
+        toast('✓ '+result.message);
+        renderSalaryOverview();
+        if(sbClient && sbConnected){
+          setTimeout(()=>{syncFromSupabase(false);},500);
+        }
+      }else{
+        toast('✗ '+result.message);
+      }
     }
   }
 }
@@ -3989,7 +4022,7 @@ function renderSalarySummary(){
   const settlement=isSettled?getSettlement(salaryMonth):null;
   let settlementHtml='';
   if(isSettled){
-    // 已结算状态显示
+    // v149: 已结算状态显示，含解锁按钮
     settlementHtml=`<div class="card" style="padding:10px 12px;background:linear-gradient(135deg,rgba(76,175,80,.1),rgba(76,175,80,.05));border:1px solid var(--success)">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
         <span style="font-size:18px">✓</span>
@@ -4001,9 +4034,12 @@ function renderSalarySummary(){
           </div>
         </div>
       </div>
-      <div style="font-size:10px;color:var(--text2);padding:6px;background:var(--card2);border-radius:6px;margin-top:6px">
-        💡 已结算月份的薪资数据为快照存档，不受后续数据变更影响。如需调整请联系管理员。
+      <div style="font-size:10px;color:var(--text2);padding:6px;background:var(--card2);border-radius:6px;margin-bottom:8px">
+        💡 已结算月份的薪资数据为快照存档，不受后续数据变更影响。
       </div>
+      <button class="btn btn-primary" onclick="confirmSettleMonth()" style="background:var(--text2);font-size:13px;width:100%">
+        🔓 解锁修改（${salaryMonth}）
+      </button>
     </div>`;
   }else{
     // 未结算状态显示结算按钮
