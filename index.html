@@ -1269,6 +1269,7 @@ const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
 let sbClient = null;
 let sbConnected = false;
 let sbSyncInProgress = false;
+let sbSyncStartTime = 0; // v171: 记录同步开始时间，用于卡死检测
 let sbSyncQueue = [];
 let sbSelfTriggering = false; // 防止自己推送触发拉取的反馈循环
 let sbDirtyTables = new Set(); // 记录本地刚保存、尚未确认上传完成的表
@@ -1526,10 +1527,19 @@ async function syncFromSupabase(showToast){
     return false; // 静默跳过，减少日志噪音
   }
   if(sbSyncInProgress){
-    if(showToast) toast('同步进行中，请稍候...');
-    return false;
+    // v171: 安全超时——如果同步卡了超过15秒，强制重置
+    if(Date.now() - sbSyncStartTime > 15000){
+      console.warn('[v171] syncFromSupabase 卡死超过15秒，强制重置');
+      sbSyncInProgress = false;
+      sbSelfTriggering = false;
+      sbSyncQueue = [];
+    } else {
+      if(showToast) toast('同步进行中，请稍候...');
+      return false;
+    }
   }
   sbSyncInProgress = true;
+  sbSyncStartTime = Date.now(); // v171: 记录开始时间
   if(showToast) showSyncStatus('正在从云端同步...', 'syncing');
 
   let successCount = 0;
@@ -7145,18 +7155,81 @@ async function _forcePullAllTables(){
       localStorage.setItem('jb2_schedules', JSON.stringify(schedules));
       console.log('[v169] 强制拉取 schedules:', schedules.length, '条');
     }
-    // 拉取其他简单表
-    for(const key of ['attendance','td_exchanges','td_consumption','td_adjustments','ratio_overrides','recharges','salary_settlements','salary_change_logs']){
+    // v171: 拉取其他简单表——必须做字段映射+FK还原，否则UI读不到
+    const empIdReverseMap = await _sbGetEmployeeIdReverseMap();
+    const scriptIdReverseMap = await _sbGetScriptIdReverseMap();
+    // jsonb表：ratio_overrides / data_overrides 用data列存储整条记录
+    const jsonbTables = ['ratio_overrides','data_overrides'];
+    for(const key of ['attendance','td_exchanges','td_consumption','td_adjustments','recharges','salary_settlements','salary_change_logs']){
       const tbl = SB_TABLE_MAP[key];
       if(!tbl) continue;
       try{
         const {data: rows, error} = await sbClient.from(tbl).select('*');
         if(!error && rows){
-          localStorage.setItem('jb2_' + key, JSON.stringify(rows));
-          console.log('[v169] 强制拉取', key, ':', rows.length, '条');
+          const mapped = rows.map(r => {
+            const local = _sbCloudToLocal(key, r);
+            if(key === 'attendance'){
+              local.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || local.employeeId;
+              local.makeupRefunded = r.makeup_refunded !== undefined ? r.makeup_refunded : local.makeupRefunded;
+              if(local.note){
+                const isMakeupMatch = local.note.match(/\[isMakeup:([^\]]+)\]/);
+                if(isMakeupMatch) local.isMakeup = isMakeupMatch[1] === 'true';
+                const attStatusMatch = local.note.match(/\[attStatus:([^\]]+)\]/);
+                if(attStatusMatch) local.attStatus = attStatusMatch[1];
+                local.note = local.note.replace(/\s*\[isMakeup:[^\]]*\]/g,'').replace(/\s*\[attStatus:[^\]]*\]/g,'').trim();
+              }
+            }
+            if(key === 'td_exchanges' || key === 'td_consumption' || key === 'td_adjustments' || key === 'salary_change_logs'){
+              local.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || local.employeeId;
+            }
+            if(key === 'td_consumption'){
+              local.refunded = r.refunded !== undefined ? r.refunded : false;
+            }
+            if(key === 'recharges'){
+              local.dmId = empIdReverseMap[r.dm_id] || r.dm_id || local.dmId;
+            }
+            delete local.employee_id; delete local.makeup_refunded; delete local.dm_id;
+            return local;
+          });
+          localStorage.setItem('jb2_' + key, JSON.stringify(mapped));
+          sbDirtyTables.delete(key);
+          delete sbDirtyTimestamps[key];
+          console.log('[v171] 强制拉取', key, ':', mapped.length, '条');
         }
-      }catch(e){}
+      }catch(e){ console.warn('[v171] 拉取', key, '失败:', e); }
     }
+    // jsonb表单独处理
+    for(const key of jsonbTables){
+      const tbl = SB_TABLE_MAP[key];
+      if(!tbl) continue;
+      try{
+        const {data: rows, error} = await sbClient.from(tbl).select('*');
+        if(!error && rows){
+          const mergedData = [];
+          rows.forEach(row => {
+            if(row.data && typeof row.data === 'object'){
+              const local = { ...row.data };
+              if(row.local_id !== undefined && row.local_id !== null) local.id = row.local_id;
+              if(local.employeeId && empIdReverseMap[local.employeeId]) local.employeeId = empIdReverseMap[local.employeeId];
+              if(local.scriptId && scriptIdReverseMap[local.scriptId]) local.scriptId = scriptIdReverseMap[local.scriptId];
+              mergedData.push(local);
+            } else {
+              const local = _sbCloudToLocal(key, row);
+              local.employeeId = empIdReverseMap[row.employee_id] || row.employee_id || local.employeeId;
+              local.scriptId = scriptIdReverseMap[row.script_id] || row.script_id || local.scriptId;
+              delete local.employee_id; delete local.script_id;
+              mergedData.push(local);
+            }
+          });
+          localStorage.setItem('jb2_' + key, JSON.stringify(mergedData));
+          sbDirtyTables.delete(key);
+          delete sbDirtyTimestamps[key];
+          console.log('[v171] 强制拉取', key, ':', mergedData.length, '条(jsonb)');
+        }
+      }catch(e){ console.warn('[v171] 拉取', key, '失败:', e); }
+    }
+    // v171: scripts/employees/sessions/schedules 拉取后也清脏标记
+    ['scripts','employees','sessions','schedules'].forEach(k=>{sbDirtyTables.delete(k);delete sbDirtyTimestamps[k];});
     return true;
   }catch(e){
     console.error('[v169] 强制拉取失败:', e);
