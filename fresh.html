@@ -1272,7 +1272,20 @@ let sbSyncInProgress = false;
 let sbSyncQueue = [];
 let sbSelfTriggering = false; // 防止自己推送触发拉取的反馈循环
 let sbDirtyTables = new Set(); // 记录本地刚保存、尚未确认上传完成的表
+let sbDirtyTimestamps = {}; // v166: 记录每个脏标记设置时间，用于安全超时
 let sbSyncDebounceTimer = null; // 去重定时器
+
+// v166: 脏标记安全超时——超过30秒的脏标记自动清除，防止永久阻塞下载
+setInterval(function(){
+  var now = Date.now();
+  sbDirtyTables.forEach(function(key){
+    if(sbDirtyTimestamps[key] && now - sbDirtyTimestamps[key] > 30000){
+      console.log('[Supabase] 脏标记超时自动清除:', key);
+      sbDirtyTables.delete(key);
+      delete sbDirtyTimestamps[key];
+    }
+  });
+}, 5000);
 
 // 表名映射：localStorage key -> Supabase 表名
 const SB_TABLE_MAP = {
@@ -1496,8 +1509,7 @@ async function syncFromSupabase(showToast){
     return false;
   }
   if(sbSelfTriggering){
-    console.log('[Supabase] 跳过自触发拉取（防止反馈循环）');
-    return false;
+    return false; // 静默跳过，减少日志噪音
   }
   if(sbSyncInProgress){
     if(showToast) toast('同步进行中，请稍候...');
@@ -1840,12 +1852,16 @@ async function syncFromSupabase(showToast){
       try {
         const { data, error } = await sbClient.from(tableName).select('*');
         if(error){
-          if(error.code === '42P01' || error.message?.includes('does not exist')) continue;
-          console.warn('[Supabase] 拉取', tableName, '失败:', error);
+          if(error.code === '42P01' || error.message?.includes('does not exist')){
+            console.warn('[Supabase] 表', tableName, '不存在，跳过');
+            continue;
+          }
+          console.warn('[Supabase] 拉取', tableName, '失败:', error.message || error);
           failCount++;
           continue;
         }
         if(data !== null){
+          console.log('[Supabase] 拉取', tableName, '成功:', data.length, '条');
           const localData = data.map(row => _sbCloudToLocal(localKey, row));
           // 简单表FK还原：将云端UUID转回本地数字ID
           if(localKey === 'attendance'){
@@ -2048,7 +2064,8 @@ async function syncFromSupabase(showToast){
     return true;
   } finally {
     sbSyncInProgress = false;
-    sbDirtyTables.clear(); // 上传完成，清除所有脏标记
+    // v166: 不再在下载后清除脏标记——下载不应干涉上传的脏标记
+    // 脏标记由 _sbSyncToSupabase 自行管理（上传前乐观清除，失败后重新标记）
     if(sbSyncQueue.length > 0){
       const queue = [...sbSyncQueue];
       sbSyncQueue = [];
@@ -2069,7 +2086,7 @@ async function _sbSyncToSupabase(localKey, data){
   try {
     // ===== employees：拆分到 profiles + employees =====
     if(localKey === 'employees'){
-      sbDirtyTables.delete('employees'); // v165: 乐观清除，上传前就解除拉取阻塞
+      sbDirtyTables.delete('employees');
       await _sbSyncEmployees(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 employees', data.length, '条');
@@ -2116,7 +2133,7 @@ async function _sbSyncToSupabase(localKey, data){
     const tableName = SB_TABLE_MAP[localKey];
     if(!tableName) return;
 
-    sbDirtyTables.delete(localKey); // v165: 乐观清除，防止上传失败导致脏标记永久阻塞拉取
+    sbDirtyTables.delete(localKey);
 
     // 获取FK映射（仅含employee_id或script_id的表需要）
     let empIdMap = null, scriptIdMap = null;
@@ -2177,6 +2194,9 @@ async function _sbSyncToSupabase(localKey, data){
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
   } catch(e){
     console.warn('[Supabase] 同步', localKey, '异常:', e);
+    // v166: 上传失败时重新标记脏表，防止下载覆盖本地未成功上传的数据
+    sbDirtyTables.add(localKey);
+    sbDirtyTimestamps[localKey] = Date.now();
   } finally {
     // v164: 延迟清除自触发标记，清除后立即触发一次拉取，确保跨设备数据传播
     setTimeout(()=>{
@@ -2564,6 +2584,7 @@ async function _sbSyncAdminPwd(pwd){
       DB[saveMethodName] = function(data){
         originalSave(data);
         sbDirtyTables.add(localKey); // 标记为脏表
+        sbDirtyTimestamps[localKey] = Date.now(); // v166: 记录时间戳
         _sbSyncToSupabase(localKey, data);
       };
     }
@@ -3515,6 +3536,8 @@ async function unifiedLogin(){
       // 员工登录成功
       currentEmp = emp;
       adminLoggedIn = false;
+      // v166: 员工登录时清除脏标记，确保能从云端拉取最新数据
+      sbDirtyTables.clear();
       var overlay3 = document.getElementById('unifiedLoginOverlay');
       if(overlay3) overlay3.style.display = 'none';
       document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
