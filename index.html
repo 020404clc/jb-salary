@@ -573,10 +573,10 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
 }
 #unifiedLoginOverlay .login-box h2{font-size:22px;margin-bottom:6px}
 #unifiedLoginOverlay .login-box .login-subtitle{font-size:13px;color:var(--text2);margin-bottom:24px}
-#unifiedLoginOverlay .login-box select{
+#unifiedLoginOverlay .login-box input[type="text"]{
   width:100%;padding:13px;border:1px solid var(--border);border-radius:10px;
   font-size:16px;background:var(--input);color:var(--text);box-sizing:border-box;
-  appearance:auto;-webkit-appearance:menulist;
+  text-align:center;
 }
 #unifiedLoginOverlay .login-box input[type="password"]{
   width:100%;padding:13px;border:1px solid var(--border);border-radius:10px;
@@ -596,11 +596,11 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
 <div id="unifiedLoginOverlay">
   <div class="login-box">
     <h2>&#127917; 剧本杀薪资管理</h2>
-    <p class="login-subtitle">选择账号并输入密码登录</p>
-    <select id="loginAccount">
-      <option value="">请选择账号</option>
-      <option value="__admin__">&#128272; 管理员</option>
-    </select>
+    <p class="login-subtitle">选择或输入账号，再输入密码登录</p>
+    <input type="text" id="loginAccount" list="accountList" placeholder="选择或输入账号" autocomplete="off">
+    <datalist id="accountList">
+      <option value="管理员">
+    </datalist>
     <input type="password" id="loginPassword" placeholder="请输入密码" onkeydown="if(event.key==='Enter')unifiedLogin()">
     <button class="btn btn-primary login-btn" onclick="unifiedLogin()">登 录</button>
   </div>
@@ -3293,18 +3293,18 @@ let attMonth=monthStr();
 // ========================================
 // v147: 登录前仅使用本地数据填充账号列表，不请求云端
 function populateLoginAccounts(){
-  const sel = document.getElementById('loginAccount');
-  if(!sel) return;
-  let options = '<option value="">请选择账号</option><option value="__admin__">🔑 管理员</option>';
-  // v147: 仅使用本地员工数据，不请求云端profiles表
+  const dl = document.getElementById('accountList');
+  if(!dl) return;
+  // v150: datalist 可选可输，管理员排首位，DM依次排列
+  let options = '<option value="管理员">';
   const emps = DB.getEmployees();
   const seenNames = new Set(['管理员']);
   emps.forEach(e => {
     if(seenNames.has(e.name)) return;
     seenNames.add(e.name);
-    options += `<option value="emp_${e.id}">${e.name}</option>`;
+    options += `<option value="${e.name}">`;
   });
-  sel.innerHTML = options;
+  dl.innerHTML = options;
 }
 
 function showUnifiedLogin(){
@@ -3344,12 +3344,12 @@ function updateRoleIndicator(){
 
 async function unifiedLogin(){
   if(!saveLock('unifiedLogin')) return;
-  const accountVal = document.getElementById('loginAccount').value;
+  const accountVal = document.getElementById('loginAccount').value.trim();
   const pwd = document.getElementById('loginPassword').value;
-  if(!accountVal){ toast('请选择账号'); return; }
+  if(!accountVal){ toast('请选择或输入账号'); return; }
   if(!pwd){ toast('请输入密码'); return; }
 
-  if(accountVal === '__admin__'){
+  if(accountVal === '管理员'){
     // === 管理员登录 ===
     let adminPwd = DB.getAdminPwd();
     // 优先从云端获取最新管理员密码
@@ -3378,64 +3378,34 @@ async function unifiedLogin(){
       document.getElementById('loginPassword').focus();
     }
   }else{
-    // === 员工登录 ===
+    // === 员工登录（按名称匹配） ===
     let emp = null;
     let pwdMatch = false;
+    const empName = accountVal;
 
-    if(accountVal.startsWith('profile_')){
-      // 从云端 profiles 验证
-      const profileId = accountVal.replace('profile_','');
-      if(sbClient){
-        try{
-          const {data:profile} = await sbClient.from('profiles').select('*').eq('id',profileId).eq('role','employee').maybeSingle();
-          if(!profile){ toast('账号不存在'); return; }
-          if(profile.password && pwd === profile.password) pwdMatch = true;
-          // 查找关联 employee 记录
-          const {data:empRec} = await sbClient.from('employees').select('*').eq('profile_id',profileId).maybeSingle();
-          if(empRec){
-            emp = DB.getEmployees().find(e=>e.name===profile.name) || empById(empRec.id);
-          }else{
-            emp = DB.getEmployees().find(e=>e.name===profile.name);
-          }
-          if(!pwdMatch && emp){
-            if(emp.password && pwd === emp.password) pwdMatch = true;
-            if(!emp.password){
-              const ph = (emp.phone||'').slice(-4);
-              if(ph && pwd === ph) pwdMatch = true;
-            }
-          }
-          // 如本地无此员工记录，从 profile 创建
-          if(!emp){
-            const emps = DB.getEmployees();
-            const newId = emps.length ? Math.max(...emps.map(e=>e.id))+1 : 1;
-            emp = {id:newId, name:profile.name, phone:profile.phone||'', password:profile.password||'', workType:'full_time', guaranteeLevel:0, hireMonth:'', assessmentPercent:0, accommodationStatus:'none'};
-            emps.push(emp);
-            DB.setEmployees(emps);
-          }
-        }catch(e){
-          console.warn('[Auth] profiles验证失败:',e);
-          toast('登录验证失败，请重试');
-          return;
-        }
+    // 先从本地查找员工
+    emp = DB.getEmployees().find(e => e.name === empName);
+    if(emp){
+      if(emp.password && pwd === emp.password) pwdMatch = true;
+      if(!pwdMatch && !emp.password){
+        const ph = (emp.phone||'').slice(-4);
+        if(ph && pwd === ph) pwdMatch = true;
       }
-    }else{
-      // 本地员工验证
-      const empId = parseInt(accountVal.replace('emp_',''));
-      emp = empById(empId);
-      if(emp){
-        if(emp.password && pwd === emp.password) pwdMatch = true;
-        if(!pwdMatch && !emp.password){
-          const ph = (emp.phone||'').slice(-4);
-          if(ph && pwd === ph) pwdMatch = true;
+    }
+    // 本地未匹配，尝试云端 profiles 验证
+    if(!pwdMatch && sbClient){
+      try{
+        const {data:profile} = await sbClient.from('profiles').select('*').eq('name',empName).eq('role','employee').maybeSingle();
+        if(profile && profile.password && pwd === profile.password) pwdMatch = true;
+        // 如本地无此员工记录，从 profile 创建
+        if(!emp && profile){
+          const emps = DB.getEmployees();
+          const newId = emps.length ? Math.max(...emps.map(e=>e.id))+1 : 1;
+          emp = {id:newId, name:profile.name, phone:profile.phone||'', password:profile.password||'', workType:'full_time', guaranteeLevel:0, hireMonth:'', assessmentPercent:0, accommodationStatus:'none'};
+          emps.push(emp);
+          DB.setEmployees(emps);
         }
-        // 也尝试云端验证
-        if(!pwdMatch && sbClient){
-          try{
-            const {data:profile} = await sbClient.from('profiles').select('*').eq('name',emp.name).eq('role','employee').maybeSingle();
-            if(profile && profile.password && pwd === profile.password) pwdMatch = true;
-          }catch(e){}
-        }
-      }
+      }catch(e){ console.warn('[Auth] profiles验证失败:',e); }
     }
 
     if(!emp){ toast('员工不存在'); return; }
