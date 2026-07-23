@@ -600,9 +600,8 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
       <option value="rjx8888">
     </datalist>
     <input type="password" id="loginPassword" placeholder="请输入密码" onkeydown="if(event.key==='Enter')unifiedLogin()">
-    <button class="btn btn-primary login-btn" onclick="try{unifiedLogin()}catch(e){var d=document.getElementById('loginError');if(d)d.textContent='点击异常:'+e.message;alert('按钮点击异常:'+e.message)}">登 录</button>
+    <button class="btn btn-primary login-btn" onclick="unifiedLogin()">登 录</button>
     <div id="loginError" style="color:#e94560;font-size:13px;margin-top:10px;min-height:20px"></div>
-    <div id="diagPanel" style="color:#888;font-size:10px;margin-top:16px;white-space:pre-wrap;text-align:left;border-top:1px solid #333;padding-top:8px;max-height:120px;overflow-y:auto"></div>
   </div>
 </div>
 
@@ -1097,39 +1096,11 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
 
 <script>
 // ========================================
-// v160: Global error handler for diagnostics
-// ========================================
-window.__jbErrors = [];
-window.onerror = function(msg, url, line, col, error) {
-  var errInfo = 'Error: ' + msg + ' at line ' + line + ':' + col;
-  window.__jbErrors.push(errInfo);
-  console.error('[DIAG]', errInfo, error);
-  // Try to show on login error div if available
-  try {
-    var diagEl = document.getElementById('loginError');
-    if (diagEl) diagEl.textContent = 'JS错误: ' + msg + ' (行' + line + ')';
-    var diagEl2 = document.getElementById('diagPanel');
-    if (diagEl2) diagEl2.textContent = window.__jbErrors.join('\n');
-  } catch(e) {}
-  return false;
-};
-window.addEventListener('unhandledrejection', function(e) {
-  var msg = 'UnhandledRejection: ' + (e.reason ? (e.reason.message || e.reason) : 'unknown');
-  window.__jbErrors.push(msg);
-  console.error('[DIAG]', msg);
-  try {
-    var diagEl = document.getElementById('loginError');
-    if (diagEl) diagEl.textContent = msg;
-  } catch(e) {}
-});
-console.log('[DIAG] v160 诊断版已加载，全局错误捕获已启用');
-
-// ========================================
 // CONSTANTS
 // ========================================
-var GUARANTEE_BASE={5:1300,6:1560,7:1820,8:2080,9:2340};
-var WT_LABELS={full_time_no_base:'无底薪高提成',full_time_guaranteed:'有责保底',semi_full_time:'半全职',part_time:'兼职'};
-var WT_CLASSES={full_time_no_base:'a',full_time_guaranteed:'b',semi_full_time:'c',part_time:'d'};
+const GUARANTEE_BASE={5:1300,6:1560,7:1820,8:2080,9:2340};
+const WT_LABELS={full_time_no_base:'无底薪高提成',full_time_guaranteed:'有责保底',semi_full_time:'半全职',part_time:'兼职'};
+const WT_CLASSES={full_time_no_base:'a',full_time_guaranteed:'b',semi_full_time:'c',part_time:'d'};
 // 兼容旧数据：将各种可能的workType值规范化
 function normalizeWorkType(wt){
   if(!wt)return 'part_time';
@@ -1165,12 +1136,12 @@ function isGuaranteedEmp(emp){if(!emp)return false;return normalizeWorkType(emp.
 function isFullTimeNoBaseEmp(emp){if(!emp)return false;return normalizeWorkType(emp.workType)==='full_time_no_base';}
 function isSemiFullTimeEmp(emp){if(!emp)return false;return normalizeWorkType(emp.workType)==='semi_full_time';}
 function getNormWorkType(emp){if(!emp)return 'part_time';return normalizeWorkType(emp.workType);}
-var PROFICIENCY_TIERS=[{min:50,bonus:3},{min:30,bonus:2},{min:10,bonus:1},{min:0,bonus:0}];
+const PROFICIENCY_TIERS=[{min:50,bonus:3},{min:30,bonus:2},{min:10,bonus:1},{min:0,bonus:0}];
 
 // ========================================
 // DATA LAYER
 // ========================================
-var DB={
+const DB={
   _g(k){return JSON.parse(localStorage.getItem('jb2_'+k)||'[]');},
   _s(k,v){
     localStorage.setItem('jb2_'+k,JSON.stringify(v));
@@ -1243,7 +1214,7 @@ function sanitizeObject(obj) {
 }
 
 // 保存防抖：防止短时间内多次保存同一类型数据
-var _saveLocks = {};
+const _saveLocks = {};
 function saveLock(key) {
   if (_saveLocks[key]) return false;
   _saveLocks[key] = true;
@@ -1290,8 +1261,8 @@ function afterSave(msg) {
 // ========================================
 // SUPABASE CLOUD SYNC LAYER
 // ========================================
-var SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
-var SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
+const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
 let sbClient = null;
 let sbConnected = false;
 let sbSyncInProgress = false;
@@ -1301,7 +1272,7 @@ let sbDirtyTables = new Set(); // 记录本地刚保存、尚未确认上传完�
 let sbSyncDebounceTimer = null; // 去重定时器
 
 // 表名映射：localStorage key -> Supabase 表名
-var SB_TABLE_MAP = {
+const SB_TABLE_MAP = {
   'employees': 'employees',
   'scripts': 'scripts',
   'sessions': 'sessions',
@@ -1319,7 +1290,7 @@ var SB_TABLE_MAP = {
 
 // ---------- 字段映射配置 ----------
 // 每个表定义 localKey→cloudKey 的字段映射（仅列出需要映射的）
-var SB_FIELD_MAP = {
+const SB_FIELD_MAP = {
   employees: { workType:'work_type', guaranteeLevel:'guarantee_level', hireMonth:'hire_month', assessmentPercent:'assess_percent', accommodationStatus:'accommodation' },
   scripts: { standardHours:'standard_hours', durationFrom:'duration_from', durationTo:'duration_to' },
   sessions: { scriptId:'script_id', startTime:'start_time', endTime:'end_time', startDate:'start_date', playerCount:'players', unitPrice:'price', actualAmount:'actual_amount', deductionAmount:'deduction_amount', deductedCardPhone:'deducted_card_phone', chargeAmount:'costume', createdBy:'created_by' },
@@ -1843,7 +1814,7 @@ async function syncFromSupabase(showToast){
       try {
         const { data, error } = await sbClient.from(tableName).select('*');
         if(error){
-          if(error.code === '42P01' || (error.message&&error.message.includes('does not exist'))) continue;
+          if(error.code === '42P01' || error.message?.includes('does not exist')) continue;
           console.warn('[Supabase] 拉取', tableName, '失败:', error);
           failCount++;
           continue;
@@ -3037,12 +3008,12 @@ function calcMonthlySalary(empId,month){
     details.push({
       sessionId:s.id,scriptName:scriptName(s.scriptId),date:s.date,scriptId:s.scriptId,
       startTime:s.startTime,endTime:s.endTime,
-      effectiveHours:(dmEntry&&dmEntry.effectiveHours)||0,
+      effectiveHours:dmEntry?.effectiveHours||0,
       groupPct:roundTo(grpPct*100,1),individualPct:roundTo(indPct*100,1),
       scriptProfPct:roundTo(scriptProfPct*100,1),
       baseCommission:baseComm,tripCommission:tripComm,chargeCommission:chargeComm,
       proficiencyCommission:profComm,
-      midnightFee:midFee.fee,midnightChoice:(dmEntry&&dmEntry.midnightChoice)||'midnight',
+      midnightFee:midFee.fee,midnightChoice:dmEntry?.midnightChoice||'midnight',
       actualAmount:s.actualAmount||0,deductionAmount:deduction,deductedCardPhone:s.deductedCardPhone||''
     });
     commissionTotal+=baseComm;
@@ -3340,39 +3311,17 @@ function showUnifiedLogin(){
   adminLoggedIn = false;
   currentEmp = null;
   currentUser = null;
-  document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
-  var overlay = document.getElementById('unifiedLoginOverlay');
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  const overlay = document.getElementById('unifiedLoginOverlay');
   if(overlay){
     overlay.style.display = 'flex';
   }
   // 清空密码框并填充账号列表
-  var pwdInput = document.getElementById('loginPassword');
+  const pwdInput = document.getElementById('loginPassword');
   if(pwdInput) pwdInput.value = '';
   populateLoginAccounts();
   // 更新角色指示器
   updateRoleIndicator();
-  // v160: 显示诊断信息
-  try{
-    var diagEl = document.getElementById('diagPanel');
-    if(diagEl){
-      var info = 'v160 诊断信息:\n';
-      info += 'unifiedLogin函数: ' + (typeof unifiedLogin === 'function' ? '✓已定义' : '✗未定义') + '\n';
-      info += '登录按钮: ' + (document.querySelector('.login-btn') ? '✓存在' : '✗不存在') + '\n';
-      info += '账号输入框: ' + (document.getElementById('loginAccount') ? '✓存在' : '✗不存在') + '\n';
-      info += '密码输入框: ' + (document.getElementById('loginPassword') ? '✓存在' : '✗不存在') + '\n';
-      info += 'Overlay显示: ' + (overlay ? overlay.style.display : 'N/A') + '\n';
-      info += 'sbClient: ' + (typeof sbClient !== 'undefined' && sbClient ? '✓已初始化' : '✗未初始化') + '\n';
-      info += 'DB对象: ' + (typeof DB !== 'undefined' && DB ? '✓存在' : '✗不存在') + '\n';
-      info += 'localStorage: ' + (typeof localStorage !== 'undefined' ? '✓可用' : '✗不可用') + '\n';
-      info += 'JS错误数: ' + (window.__jbErrors ? window.__jbErrors.length : 0) + '\n';
-      if(window.__jbErrors && window.__jbErrors.length > 0){
-        info += '---错误详情---\n' + window.__jbErrors.join('\n');
-      }
-      diagEl.textContent = info;
-    }
-  }catch(e){
-    console.error('[DIAG] 诊断信息写入失败:', e);
-  }
 }
 
 function updateRoleIndicator(){
@@ -4319,22 +4268,22 @@ function renderSalarySessionDetail(){
           <div style="color:var(--text2);margin-bottom:3px;font-weight:600">场次信息</div>
           <div style="display:flex;justify-content:space-between;padding:1px 0">
             <span>房号</span>
-            <span style="font-weight:600">${(session&&session.room)||'-'}</span>
+            <span style="font-weight:600">${session?.room||'-'}</span>
           </div>
           <div style="display:flex;justify-content:space-between;padding:1px 0">
             <span>人数</span>
-            <span style="font-weight:600">${(session&&session.playerCount)||'-'}</span>
+            <span style="font-weight:600">${session?.playerCount||'-'}</span>
           </div>
           <div style="display:flex;justify-content:space-between;padding:1px 0">
             <span>单价</span>
-            <span style="font-weight:600">&yen;${(session&&session.unitPrice)||'-'}</span>
+            <span style="font-weight:600">&yen;${session?.unitPrice||'-'}</span>
           </div>
           <div style="display:flex;justify-content:space-between;padding:1px 0">
             <span>加时费/人</span>
-            <span style="font-weight:600">&yen;${(dmEntry&&dmEntry.overtimeFeePerPerson)||0}</span>
+            <span style="font-weight:600">&yen;${dmEntry?.overtimeFeePerPerson||0}</span>
           </div>
           ${allDms?'<div style="display:flex;justify-content:space-between;padding:1px 0"><span>DM</span><span style="font-weight:600">'+allDms+'</span></div>':''}
-          ${(session&&session.notes)?'<div style="display:flex;justify-content:space-between;padding:1px 0"><span>备注</span><span style="font-weight:600">'+session.notes+'</span></div>':''}
+          ${session?.notes?'<div style="display:flex;justify-content:space-between;padding:1px 0"><span>备注</span><span style="font-weight:600">'+session.notes+'</span></div>':''}
         </div>
         <div style="background:var(--bg);border-radius:4px;padding:6px;font-size:10px">
           <div style="color:var(--text2);margin-bottom:3px;font-weight:600">提成计算明细</div>
@@ -5982,7 +5931,7 @@ function saveLeave(){
 }
 
 // ---- Makeup Card (补卡) ----
-var MAKEUP_LIMIT_PER_MONTH = 3;
+const MAKEUP_LIMIT_PER_MONTH = 3;
 
 function getMonthlyMakeupCount(empId, month) {
   const att = DB.getAttendance().filter(a => empIdMatch(a.employeeId, empId) && a.date.startsWith(month) && a.isMakeup && !a.makeupRefunded);
@@ -6338,7 +6287,7 @@ function renderEmpSessions(){
       <div id="esd_${s.id}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);font-size:11px;color:var(--text2);line-height:1.8">
         <div>房号: ${s.room||'-'} | 人数: ${s.playerCount} | 单价: &yen;${s.unitPrice||'-'}</div>
         <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡: ¥'+s.deductionAmount+' (尾号'+(s.deductedCardPhone||'?')+')':''}</div>
-        <div>加时费/人: &yen;${(dm&&dm.overtimeFeePerPerson)||0}</div>
+        <div>加时费/人: &yen;${dm?.overtimeFeePerPerson||0}</div>
         <div>DM: ${s.dms.map(d=>empName(d.employeeId)+'('+d.effectiveHours+'h)').join(', ')}</div>
         ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').replace(/\s*\[costumeId:[^\]]*\]/g,'').trim())+'</div>':''}
       </div>
@@ -6752,9 +6701,9 @@ async function changeEmpPassword(){
   if(!currentEmp){ toast('请先登录'); return; }
   if(!saveLock('changeEmpPwd')) return;
   
-  const oldPwd = (document.getElementById('empOldPwd')||{}).value || '';
-  const newPwd = (document.getElementById('empNewPwd')||{}).value || '';
-  const confirmPwd = (document.getElementById('empConfirmPwd')||{}).value || '';
+  const oldPwd = document.getElementById('empOldPwd')?.value || '';
+  const newPwd = document.getElementById('empNewPwd')?.value || '';
+  const confirmPwd = document.getElementById('empConfirmPwd')?.value || '';
   
   if(!oldPwd){ toast('请输入当前密码'); return; }
   if(!newPwd){ toast('请输入新密码'); return; }
@@ -7283,7 +7232,7 @@ let cardOverviewExpanded=false;
 function renderCardOverview(){
   const el=document.getElementById('cardOverview');
   if(!el)return;
-  const searchVal=((document.getElementById('cardOverviewSearch')||{}).value||'').trim();
+  const searchVal=(document.getElementById('cardOverviewSearch')?.value||'').trim();
   let cards=getAllCards();
   if(searchVal){cards=cards.filter(c=>c.phone.includes(searchVal));cardOverviewExpanded=false;}
   if(!cards.length){el.innerHTML='<div style="text-align:center;color:var(--text2);padding:16px 0;font-size:13px">'+(searchVal?'未找到匹配的卡片':'暂无会员卡')+'</div>';return;}
@@ -7351,7 +7300,7 @@ function openCardDetail(phone){
 
 let rechargeListExpanded=false;
 function renderRechargeList(){
-  const searchVal=((document.getElementById('rechargeSearch')||{}).value||'').trim();
+  const searchVal=(document.getElementById('rechargeSearch')?.value||'').trim();
   let recharges=DB.getRecharges().sort((a,b)=>(b.date+b.id).localeCompare(a.date+a.id));
   if(searchVal){
     recharges=recharges.filter(r=>r.phone.includes(searchVal));
