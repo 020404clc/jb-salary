@@ -1293,6 +1293,26 @@ function _clearLocalBusinessData(){
   sbDirtyTimestamps = {};
   console.log('[v168] 已清空本地业务数据，保留:', keepKeys);
 }
+// v175: 登录前强制上传所有脏数据到云端，防止数据丢失
+async function _flushDirtyTablesToCloud(){
+  if(!sbClient || sbDirtyTables.size === 0) return;
+  console.log('[v175] 登录前同步脏表:', [...sbDirtyTables]);
+  const dirtyKeys = [...sbDirtyTables];
+  for(const key of dirtyKeys){
+    try{
+      const data = JSON.parse(localStorage.getItem('jb2_'+key) || '[]');
+      if(data && data.length > 0){
+        await _sbSyncToSupabase(key, data);
+        console.log('[v175] 已同步脏表:', key, data.length, '条');
+      }
+    }catch(e){
+      console.warn('[v175] 同步脏表失败:', key, e);
+    }
+  }
+  // 等待队列中的任务也完成
+  await new Promise(resolve => setTimeout(resolve, 2000));
+}
+
 let sbSyncDebounceTimer = null; // 去重定时器
 
 // v166: 脏标记安全超时——超过30秒的脏标记自动清除，防止永久阻塞下载
@@ -3489,6 +3509,8 @@ async function unifiedLogin(){
         adminLoggedIn = true;
         currentEmp = null;
         currentUser = {id:'admin', name:'rjx8888', role:'admin'};
+        // v175: 先上传脏数据到云端，防止数据丢失
+        await _flushDirtyTablesToCloud();
         // v168: 管理员登录也清空本地业务数据，确保从云端全量拉取最新数据
         _clearLocalBusinessData('jb2_admin_pwd');
         var overlay = document.getElementById('unifiedLoginOverlay');
@@ -3529,6 +3551,8 @@ async function unifiedLogin(){
           adminLoggedIn = true;
           currentEmp = null;
           currentUser = {id:'admin', name:'rjx8888', role:'admin'};
+          // v175: 先上传脏数据到云端，防止数据丢失
+          await _flushDirtyTablesToCloud();
           // v168: 管理员云端登录也清空本地数据
           _clearLocalBusinessData('jb2_admin_pwd');
           var overlay2 = document.getElementById('unifiedLoginOverlay');
@@ -3597,6 +3621,8 @@ async function unifiedLogin(){
       // 员工登录成功
       currentEmp = emp;
       adminLoggedIn = false;
+      // v175: 先上传脏数据到云端，防止数据丢失
+      await _flushDirtyTablesToCloud();
       // v168: 统一使用通用函数清空本地业务数据
       _clearLocalBusinessData('jb2_admin_pwd', 'jb2_current_emp_id', 'jb2_reset_flag');
       var overlay3 = document.getElementById('unifiedLoginOverlay');
