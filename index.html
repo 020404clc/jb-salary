@@ -1910,12 +1910,27 @@ async function syncFromSupabase(showToast){
             });
           }
           if(localKey === 'td_exchanges'){
-            localData.forEach(r => { r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId; delete r.employee_id; });
+            localData.forEach(r => {
+              r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId;
+              // v173: 从 note 解码 type
+              var noteStr = r.note || '';
+              var typeMatch = noteStr.match(/\[type:([^\]]+)\]/);
+              if(typeMatch) r.type = typeMatch[1];
+              r.note = noteStr.replace(/\s*\[type:[^\]]*\]/g, '').trim();
+              delete r.employee_id;
+            });
           }
           if(localKey === 'td_consumption'){
             localData.forEach(r => {
               r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId;
               r.refunded = r.refunded !== undefined ? r.refunded : false;
+              // v173: 从 note 解码 direction 和 cashAmount
+              var noteStr = r.note || '';
+              var dirMatch = noteStr.match(/\[direction:([^\]]+)\]/);
+              if(dirMatch) r.direction = dirMatch[1];
+              var cashMatch = noteStr.match(/\[cashAmount:([^\]]+)\]/);
+              if(cashMatch) r.cashAmount = parseFloat(cashMatch[1]) || 0;
+              r.note = noteStr.replace(/\s*\[direction:[^\]]*\]/g, '').replace(/\s*\[cashAmount:[^\]]*\]/g, '').trim();
               delete r.employee_id;
             });
           }
@@ -2201,6 +2216,25 @@ async function _sbSyncToSupabase(localKey, data){
           if(row.isMakeup) cloudRow.note += ' [isMakeup:true]';
           if(row.attStatus) cloudRow.note += ' [attStatus:'+row.attStatus+']';
           cloudRow.note = cloudRow.note.trim();
+        }
+        // v173: td_consumption — 云端缺 direction/cash_amount 列，编码到 note
+        if(localKey === 'td_consumption'){
+          cloudRow.note = (cloudRow.note || '')
+            .replace(/\s*\[direction:[^\]]*\]/g, '')
+            .replace(/\s*\[cashAmount:[^\]]*\]/g, '');
+          if(row.direction) cloudRow.note += ' [direction:'+row.direction+']';
+          if(row.cashAmount) cloudRow.note += ' [cashAmount:'+row.cashAmount+']';
+          cloudRow.note = cloudRow.note.trim();
+          // 删除云端不存在的字段
+          delete cloudRow.direction; delete cloudRow.cashAmount;
+        }
+        // v173: td_exchanges — 云端缺 type 列，编码到 note
+        if(localKey === 'td_exchanges'){
+          cloudRow.note = (cloudRow.note || '')
+            .replace(/\s*\[type:[^\]]*\]/g, '');
+          if(row.type) cloudRow.note += ' [type:'+row.type+']';
+          cloudRow.note = cloudRow.note.trim();
+          delete cloudRow.type;
         }
         if(localKey === 'recharges' && cloudRow.dm_id !== undefined && cloudRow.dm_id !== null){
           cloudRow.dm_id = empIdMap[cloudRow.dm_id] || null;
@@ -7178,6 +7212,18 @@ async function _forcePullAllTables(){
             }
             if(key === 'td_consumption'){
               local.refunded = r.refunded !== undefined ? r.refunded : false;
+              // v173: 从 note 解码 direction 和 cashAmount
+              var noteStr = r.note || '';
+              var dirMatch = noteStr.match(/\[direction:([^\]]+)\]/);
+              if(dirMatch) local.direction = dirMatch[1];
+              var cashMatch = noteStr.match(/\[cashAmount:([^\]]+)\]/);
+              if(cashMatch) local.cashAmount = parseFloat(cashMatch[1]) || 0;
+            }
+            if(key === 'td_exchanges'){
+              // v173: 从 note 解码 type
+              var noteStr2 = r.note || '';
+              var typeMatch = noteStr2.match(/\[type:([^\]]+)\]/);
+              if(typeMatch) local.type = typeMatch[1];
             }
             if(key === 'recharges'){
               local.dmId = empIdReverseMap[r.dm_id] || r.dm_id || local.dmId;
