@@ -1293,39 +1293,58 @@ function _clearLocalBusinessData(){
   sbDirtyTimestamps = {};
   console.log('[v168] 已清空本地业务数据，保留:', keepKeys);
 }
-// v175: 登录前强制上传所有脏数据到云端，防止数据丢失
+// v176: 登录前强制上传所有脏数据到云端，防止数据丢失
+// 关键修复：循环等待直到所有脏表真正同步完成（之前只等一次，async失败就丢了）
 async function _flushDirtyTablesToCloud(){
   if(!sbClient || sbDirtyTables.size === 0) return;
-  console.log('[v175] 登录前同步脏表:', [...sbDirtyTables]);
-  const dirtyKeys = [...sbDirtyTables];
-  for(const key of dirtyKeys){
-    try{
-      const data = JSON.parse(localStorage.getItem('jb2_'+key) || '[]');
-      if(data && data.length > 0){
-        await _sbSyncToSupabase(key, data);
-        console.log('[v175] 已同步脏表:', key, data.length, '条');
+  console.log('[v176] 登录前同步脏表:', [...sbDirtyTables]);
+  var maxRounds = 5;
+  var round = 0;
+  while(sbDirtyTables.size > 0 && round < maxRounds){
+    round++;
+    var dirtyKeys = [...sbDirtyTables];
+    console.log('[v176] 第'+round+'轮同步，剩余脏表:', dirtyKeys);
+    for(const key of dirtyKeys){
+      try{
+        var data = JSON.parse(localStorage.getItem('jb2_'+key) || '[]');
+        if(data && data.length > 0){
+          await _sbSyncToSupabase(key, data);
+          console.log('[v176] 已同步脏表:', key, data.length, '条');
+        } else {
+          // 空表也清除标记
+          sbDirtyTables.delete(key);
+          delete sbDirtyTimestamps[key];
+        }
+      }catch(e){
+        console.warn('[v176] 同步脏表失败:', key, e);
+        // 失败时保留脏标记，等下一轮重试
       }
-    }catch(e){
-      console.warn('[v175] 同步脏表失败:', key, e);
+    }
+    if(sbDirtyTables.size > 0 && round < maxRounds){
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
   }
-  // 等待队列中的任务也完成
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  if(sbDirtyTables.size > 0){
+    console.warn('[v176]  经过'+maxRounds+'轮仍有未同步的脏表:', [...sbDirtyTables]);
+  } else {
+    console.log('[v176] ✅ 所有脏表已同步完成');
+  }
 }
 
 let sbSyncDebounceTimer = null; // 去重定时器
 
-// v166: 脏标记安全超时——超过30秒的脏标记自动清除，防止永久阻塞下载
+// v176: 脏标记安全超时——从30秒延长到120秒，给慢网络更多同步时间
+// 注意：sbDirtyTables.delete 已移到 _sbSyncToSupabase 成功后执行，这里只做最后兜底
 setInterval(function(){
   var now = Date.now();
   sbDirtyTables.forEach(function(key){
-    if(sbDirtyTimestamps[key] && now - sbDirtyTimestamps[key] > 30000){
-      console.log('[Supabase] 脏标记超时自动清除:', key);
+    if(sbDirtyTimestamps[key] && now - sbDirtyTimestamps[key] > 120000){
+      console.log('[Supabase] 脏标记超时自动清除(120s):', key);
       sbDirtyTables.delete(key);
       delete sbDirtyTimestamps[key];
     }
   });
-}, 5000);
+}, 10000);
 
 // 表名映射：localStorage key -> Supabase 表名
 const SB_TABLE_MAP = {
@@ -1458,16 +1477,35 @@ async function _sbGetEmployeeIdMap(){
 
 // 获取云端UUID → 本地员工ID的映射（用于反向还原）
 async function _sbGetEmployeeIdReverseMap(){
-  // 用 local_id 匹配
-  const { data: empRows } = await sbClient.from('employees').select('id,local_id');
+  // v177: 用 local_id 匹配，带重试；同时缓存 UUID→name 映射供 empName 回退使用
+  let empRows = null;
+  for(let retry = 0; retry < 3; retry++){
+    const { data, error } = await sbClient.from('employees').select('id,local_id,profile_id');
+    if(data && data.length > 0){ empRows = data; break; }
+    if(error && error.code === '42P01') break; // table not exists, no point retrying
+    await new Promise(r => setTimeout(r, 500));
+  }
   const map = {};
+  const uuidNameMap = {};
   if(empRows){
+    // 获取 profiles 用于 UUID→name 回退
+    let profileMap = {};
+    try{
+      const { data: profiles } = await sbClient.from('profiles').select('id,name');
+      if(profiles) profiles.forEach(p => { profileMap[p.id] = p.name; });
+    }catch(e){}
     empRows.forEach(e => {
       if(e.local_id !== null && e.local_id !== undefined){
         map[e.id] = e.local_id;
       }
+      // 缓存 UUID→name（通过 profile_id 桥接）
+      if(e.profile_id && profileMap[e.profile_id]){
+        uuidNameMap[e.id] = profileMap[e.profile_id];
+      }
     });
   }
+  // 持久化 UUID→name 映射供 empName 同步使用
+  try{ localStorage.setItem('jb2_uuid_emp_map', JSON.stringify(uuidNameMap)); }catch(e){}
   return map;
 }
 
@@ -1955,7 +1993,16 @@ async function syncFromSupabase(showToast){
             });
           }
           if(localKey === 'td_adjustments'){
-            localData.forEach(r => { r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId; delete r.employee_id; });
+            localData.forEach(r => {
+              r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId;
+              // v177: 从 note 恢复 empLocalId（上传时映射失败的备份）
+              if((r.employeeId == null || r.employeeId === '') && r.note){
+                var empMatch = r.note.match(/\[empLocalId:(\d+)\]/);
+                if(empMatch) r.employeeId = parseInt(empMatch[1]);
+              }
+              r.note = (r.note || '').replace(/\s*\[empLocalId:[^\]]*\]/g, '').trim();
+              delete r.employee_id;
+            });
           }
           if(localKey === 'recharges'){
             localData.forEach(r => { r.dmId = empIdReverseMap[r.dm_id] || r.dm_id || r.dmId; delete r.dm_id; });
@@ -2150,8 +2197,8 @@ async function _sbSyncToSupabase(localKey, data){
   try {
     // ===== employees：拆分到 profiles + employees =====
     if(localKey === 'employees'){
-      sbDirtyTables.delete('employees');
       await _sbSyncEmployees(data);
+      sbDirtyTables.delete('employees');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 employees', data.length, '条');
       return;
@@ -2159,8 +2206,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== sessions：拆分到 sessions + session_dm =====
     if(localKey === 'sessions'){
-      sbDirtyTables.delete('sessions');
       await _sbSyncSessions(data);
+      sbDirtyTables.delete('sessions');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 sessions', data.length, '条');
       return;
@@ -2168,8 +2215,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== schedules：拆分到 schedules + schedule_dm =====
     if(localKey === 'schedules'){
-      sbDirtyTables.delete('schedules');
       await _sbSyncSchedules(data);
+      sbDirtyTables.delete('schedules');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 schedules', data.length, '条');
       return;
@@ -2177,8 +2224,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== data_overrides：用 jsonb data 列存储整条本地记录 =====
     if(localKey === 'data_overrides'){
-      sbDirtyTables.delete('data_overrides');
       await _sbSyncDataOverrides(data);
+      sbDirtyTables.delete('data_overrides');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 data_overrides', data.length, '条');
       return;
@@ -2186,8 +2233,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== ratio_overrides：用 jsonb data 列存储整条本地记录 =====
     if(localKey === 'ratio_overrides'){
-      sbDirtyTables.delete('ratio_overrides');
       await _sbSyncRatioOverrides(data);
+      sbDirtyTables.delete('ratio_overrides');
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 ratio_overrides', data.length, '条');
       return;
@@ -2196,8 +2243,6 @@ async function _sbSyncToSupabase(localKey, data){
     // ===== 通用简单表 =====
     const tableName = SB_TABLE_MAP[localKey];
     if(!tableName) return;
-
-    sbDirtyTables.delete(localKey);
 
     // 获取FK映射（仅含employee_id或script_id的表需要）
     let empIdMap = null, scriptIdMap = null;
@@ -2226,7 +2271,18 @@ async function _sbSyncToSupabase(localKey, data){
         const cloudRow = _sbLocalToCloud(localKey, row);
         // 解析FK引用：将本地数字ID转为云端UUID
         if(empIdMap && cloudRow.employee_id !== undefined && cloudRow.employee_id !== null){
-          cloudRow.employee_id = empIdMap[cloudRow.employee_id] || null;
+          var mappedUuid = empIdMap[cloudRow.employee_id];
+          if(mappedUuid){
+            cloudRow.employee_id = mappedUuid;
+          } else {
+            // v177: 映射失败时保留原值并记录警告，避免设为null导致数据丢失
+            console.warn('[Supabase] employee_id映射失败:', localKey, 'localId=', cloudRow.employee_id, 'empIdMap=', JSON.stringify(empIdMap));
+            // 如果是纯数字ID但找不到映射，编码到note中方便后续恢复
+            if(typeof cloudRow.employee_id === 'number' || /^\d+$/.test(String(cloudRow.employee_id))){
+              cloudRow.note = (cloudRow.note || '') + ' [empLocalId:' + cloudRow.employee_id + ']';
+              delete cloudRow.employee_id;
+            }
+          }
         }
         // attendance: encode isMakeup/attStatus into note field
         if(localKey === 'attendance'){
@@ -2273,11 +2329,14 @@ async function _sbSyncToSupabase(localKey, data){
         }
       }
     }
+    // v176: 同步成功后才清除脏标记（之前是提前清除，导致上传失败时数据丢失）
+    sbDirtyTables.delete(localKey);
+    delete sbDirtyTimestamps[localKey];
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
   } catch(e){
     console.warn('[Supabase] 同步', localKey, '异常:', e);
-    // v166: 上传失败时重新标记脏表，防止下载覆盖本地未成功上传的数据
+    // 上传失败时重新标记脏表（双重保险：delete已移到成功后，这里主要是catch路径）
     sbDirtyTables.add(localKey);
     sbDirtyTimestamps[localKey] = Date.now();
   } finally {
@@ -2748,11 +2807,32 @@ function todayStr(){return new Date().toISOString().split('T')[0];}
 function monthStr(){return todayStr().substring(0,7);}
 function fmtDate(d){const p=d.split('-');return p[1]+'月'+p[2]+'日';}
 function weekDay(d){return['日','一','二','三','四','五','六'][new Date(d).getDay()];}
-function empName(id){const e=DB.getEmployees().find(x=>empIdMatch(x.id,id));return e?e.name:'?';}
+function empName(id){
+  if(id==null||id===undefined||id==='')return '?';
+  var e=DB.getEmployees().find(function(x){return empIdMatch(x.id,id);});
+  if(e)return e.name;
+  // v177: UUID fallback — check cached cloud UUID→name map
+  try{
+    var m=JSON.parse(localStorage.getItem('jb2_uuid_emp_map')||'{}');
+    if(m[String(id)])return m[String(id)];
+  }catch(ex){}
+  return '?';
+}
 function scriptName(id){const s=DB.getScripts().find(x=>x.id===id);return s?s.name:'?';}
 function scriptById(id){return DB.getScripts().find(x=>x.id===id);}
-function empIdMatch(a,b){return Number(a)===Number(b);}
-function empById(id){const e=DB.getEmployees().find(x=>empIdMatch(x.id,id));if(e&&e.workType)e.workType=normalizeWorkType(e.workType);return e;}
+function empIdMatch(a,b){
+  if(a==null&&b==null)return true;
+  if(a==null||b==null)return false;
+  var na=Number(a),nb=Number(b);
+  if(!isNaN(na)&&!isNaN(nb)&&na===nb)return true;
+  return String(a)===String(b);
+}
+function empById(id){
+  if(id==null)return null;
+  var e=DB.getEmployees().find(x=>empIdMatch(x.id,id));
+  if(e&&e.workType)e.workType=normalizeWorkType(e.workType);
+  return e;
+}
 function nextId(arr){return arr.length?Math.max(...arr.map(x=>x.id))+1:1;}
 function toast(msg,dur){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),dur||2500);}
 function roundTo(n,d){const f=Math.pow(10,d);return Math.round(n*f)/f;}
@@ -7235,6 +7315,14 @@ async function _forcePullAllTables(){
             }
             if(key === 'td_exchanges' || key === 'td_consumption' || key === 'td_adjustments' || key === 'salary_change_logs'){
               local.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || local.employeeId;
+              // v177: 从 note 恢复 empLocalId（上传时映射失败的备份）
+              if((local.employeeId == null || local.employeeId === '' || (typeof local.employeeId === 'string' && local.employeeId.length > 10)) && (r.note || local.note)){
+                var noteStr3 = r.note || local.note || '';
+                var empMatch3 = noteStr3.match(/\[empLocalId:(\d+)\]/);
+                if(empMatch3) local.employeeId = parseInt(empMatch3[1]);
+                // 清理 note 中的标记
+                if(key === 'td_adjustments') local.note = (local.note || '').replace(/\s*\[empLocalId:[^\]]*\]/g, '').trim();
+              }
             }
             if(key === 'td_consumption'){
               local.refunded = r.refunded !== undefined ? r.refunded : false;
