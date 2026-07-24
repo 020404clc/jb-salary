@@ -2602,10 +2602,27 @@ async function _sbSyncAdminPwd(pwd){
 (function wrapDBSaveMethods(){
   const tables = Object.keys(SB_TABLE_MAP);
   tables.forEach(localKey => {
-    const saveMethodName = 'save' + localKey.charAt(0).toUpperCase() + localKey.slice(1).replace(/_([a-z])/g, (m,c) => c.toUpperCase());
-    if(typeof DB[saveMethodName] === 'function'){
-      const originalSave = DB[saveMethodName].bind(DB);
-      DB[saveMethodName] = function(data){
+    // 尝试多种命名方式匹配 DB 上的实际方法名（如 td_adjustments → saveTDAdjustments / saveTdAdjustments）
+    const camel1 = 'save' + localKey.charAt(0).toUpperCase() + localKey.slice(1).replace(/_([a-z])/g, (m,c) => c.toUpperCase());
+    const camel2 = 'save' + localKey.replace(/(^|_)([a-z])/g, (m,c1,c2) => c2.toUpperCase());
+    const candidates = [camel1, camel2];
+    let matched = null;
+    for(const name of candidates){
+      if(typeof DB[name] === 'function'){ matched = name; break; }
+    }
+    // fallback: 遍历 DB 所有 save 开头的方法，找匹配的
+    if(!matched){
+      for(const k of Object.keys(DB)){
+        if(k.startsWith('save') && typeof DB[k] === 'function'){
+          const suffix = k.slice(4).toLowerCase();
+          const keyNorm = localKey.replace(/_/g,'');
+          if(suffix === keyNorm){ matched = k; break; }
+        }
+      }
+    }
+    if(matched){
+      const originalSave = DB[matched].bind(DB);
+      DB[matched] = function(data){
         originalSave(data);
         sbDirtyTables.add(localKey); // 标记为脏表
         sbDirtyTimestamps[localKey] = Date.now(); // v166: 记录时间戳
