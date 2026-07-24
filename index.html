@@ -1293,58 +1293,39 @@ function _clearLocalBusinessData(){
   sbDirtyTimestamps = {};
   console.log('[v168] 已清空本地业务数据，保留:', keepKeys);
 }
-// v176: 登录前强制上传所有脏数据到云端，防止数据丢失
-// 关键修复：循环等待直到所有脏表真正同步完成（之前只等一次，async失败就丢了）
+// v175: 登录前强制上传所有脏数据到云端，防止数据丢失
 async function _flushDirtyTablesToCloud(){
   if(!sbClient || sbDirtyTables.size === 0) return;
-  console.log('[v176] 登录前同步脏表:', [...sbDirtyTables]);
-  var maxRounds = 5;
-  var round = 0;
-  while(sbDirtyTables.size > 0 && round < maxRounds){
-    round++;
-    var dirtyKeys = [...sbDirtyTables];
-    console.log('[v176] 第'+round+'轮同步，剩余脏表:', dirtyKeys);
-    for(const key of dirtyKeys){
-      try{
-        var data = JSON.parse(localStorage.getItem('jb2_'+key) || '[]');
-        if(data && data.length > 0){
-          await _sbSyncToSupabase(key, data);
-          console.log('[v176] 已同步脏表:', key, data.length, '条');
-        } else {
-          // 空表也清除标记
-          sbDirtyTables.delete(key);
-          delete sbDirtyTimestamps[key];
-        }
-      }catch(e){
-        console.warn('[v176] 同步脏表失败:', key, e);
-        // 失败时保留脏标记，等下一轮重试
+  console.log('[v175] 登录前同步脏表:', [...sbDirtyTables]);
+  const dirtyKeys = [...sbDirtyTables];
+  for(const key of dirtyKeys){
+    try{
+      const data = JSON.parse(localStorage.getItem('jb2_'+key) || '[]');
+      if(data && data.length > 0){
+        await _sbSyncToSupabase(key, data);
+        console.log('[v175] 已同步脏表:', key, data.length, '条');
       }
-    }
-    if(sbDirtyTables.size > 0 && round < maxRounds){
-      await new Promise(resolve => setTimeout(resolve, 1500));
+    }catch(e){
+      console.warn('[v175] 同步脏表失败:', key, e);
     }
   }
-  if(sbDirtyTables.size > 0){
-    console.warn('[v176]  经过'+maxRounds+'轮仍有未同步的脏表:', [...sbDirtyTables]);
-  } else {
-    console.log('[v176] ✅ 所有脏表已同步完成');
-  }
+  // 等待队列中的任务也完成
+  await new Promise(resolve => setTimeout(resolve, 2000));
 }
 
 let sbSyncDebounceTimer = null; // 去重定时器
 
-// v176: 脏标记安全超时——从30秒延长到120秒，给慢网络更多同步时间
-// 注意：sbDirtyTables.delete 已移到 _sbSyncToSupabase 成功后执行，这里只做最后兜底
+// v166: 脏标记安全超时——超过30秒的脏标记自动清除，防止永久阻塞下载
 setInterval(function(){
   var now = Date.now();
   sbDirtyTables.forEach(function(key){
-    if(sbDirtyTimestamps[key] && now - sbDirtyTimestamps[key] > 120000){
-      console.log('[Supabase] 脏标记超时自动清除(120s):', key);
+    if(sbDirtyTimestamps[key] && now - sbDirtyTimestamps[key] > 30000){
+      console.log('[Supabase] 脏标记超时自动清除:', key);
       sbDirtyTables.delete(key);
       delete sbDirtyTimestamps[key];
     }
   });
-}, 10000);
+}, 5000);
 
 // 表名映射：localStorage key -> Supabase 表名
 const SB_TABLE_MAP = {
@@ -2169,8 +2150,8 @@ async function _sbSyncToSupabase(localKey, data){
   try {
     // ===== employees：拆分到 profiles + employees =====
     if(localKey === 'employees'){
-      await _sbSyncEmployees(data);
       sbDirtyTables.delete('employees');
+      await _sbSyncEmployees(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 employees', data.length, '条');
       return;
@@ -2178,8 +2159,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== sessions：拆分到 sessions + session_dm =====
     if(localKey === 'sessions'){
-      await _sbSyncSessions(data);
       sbDirtyTables.delete('sessions');
+      await _sbSyncSessions(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 sessions', data.length, '条');
       return;
@@ -2187,8 +2168,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== schedules：拆分到 schedules + schedule_dm =====
     if(localKey === 'schedules'){
-      await _sbSyncSchedules(data);
       sbDirtyTables.delete('schedules');
+      await _sbSyncSchedules(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 schedules', data.length, '条');
       return;
@@ -2196,8 +2177,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== data_overrides：用 jsonb data 列存储整条本地记录 =====
     if(localKey === 'data_overrides'){
-      await _sbSyncDataOverrides(data);
       sbDirtyTables.delete('data_overrides');
+      await _sbSyncDataOverrides(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 data_overrides', data.length, '条');
       return;
@@ -2205,8 +2186,8 @@ async function _sbSyncToSupabase(localKey, data){
 
     // ===== ratio_overrides：用 jsonb data 列存储整条本地记录 =====
     if(localKey === 'ratio_overrides'){
-      await _sbSyncRatioOverrides(data);
       sbDirtyTables.delete('ratio_overrides');
+      await _sbSyncRatioOverrides(data);
       updateCloudBadge(true);
       console.log('[Supabase] 已同步 ratio_overrides', data.length, '条');
       return;
@@ -2215,6 +2196,8 @@ async function _sbSyncToSupabase(localKey, data){
     // ===== 通用简单表 =====
     const tableName = SB_TABLE_MAP[localKey];
     if(!tableName) return;
+
+    sbDirtyTables.delete(localKey);
 
     // 获取FK映射（仅含employee_id或script_id的表需要）
     let empIdMap = null, scriptIdMap = null;
@@ -2290,14 +2273,11 @@ async function _sbSyncToSupabase(localKey, data){
         }
       }
     }
-    // v176: 同步成功后才清除脏标记（之前是提前清除，导致上传失败时数据丢失）
-    sbDirtyTables.delete(localKey);
-    delete sbDirtyTimestamps[localKey];
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
   } catch(e){
     console.warn('[Supabase] 同步', localKey, '异常:', e);
-    // 上传失败时重新标记脏表（双重保险：delete已移到成功后，这里主要是catch路径）
+    // v166: 上传失败时重新标记脏表，防止下载覆盖本地未成功上传的数据
     sbDirtyTables.add(localKey);
     sbDirtyTimestamps[localKey] = Date.now();
   } finally {
