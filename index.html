@@ -5103,7 +5103,13 @@ function renderSchCalendar(){
   const daysInMonth=new Date(y,m,0).getDate();
   const today=todayStr();
   const allSch=DB.getSchedules();
-  const monthSch=allSch.filter(s=>s.date&&s.date.startsWith(schMonth));
+  let monthSch=allSch.filter(s=>s.date&&s.date.startsWith(schMonth));
+  // 应用DM筛选：选中特定DM时日历只显示该DM的排班
+  const filterEl=document.getElementById('schFilterDM');
+  if(filterEl&&filterEl.value){
+    const filterDM=parseInt(filterEl.value);
+    monthSch=monthSch.filter(s=>s.dms&&s.dms.some(d=>empIdMatch(d.dmId,filterDM)));
+  }
   const datesWithSch=new Set(monthSch.map(s=>s.date));
   
   const hdrs=['日','一','二','三','四','五','六'];
@@ -5146,6 +5152,9 @@ function selectSchDate(ds){
     schSelectedDate='';
   }else{
     schSelectedDate=ds;
+    // 点击日期时清除DM筛选，显示当日所有剧本排班
+    const filterEl=document.getElementById('schFilterDM');
+    if(filterEl) filterEl.value='';
   }
   renderSchCalendar();
   renderScheduleList();
