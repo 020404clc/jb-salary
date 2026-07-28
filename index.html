@@ -656,7 +656,10 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
     <div id="atab-0" class="atab">
       <div class="card">
         <div class="card-title">场次录入 <span class="badge" id="sessBadge">0场</span></div>
-        <button class="btn btn-primary" onclick="openSessionModal()" style="margin-bottom:10px">+ 新增场次</button>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="openSessionModal()">+ 新增场次</button>
+        <button class="btn btn-secondary" onclick="manualSync()" style="font-size:11px;padding:6px 12px">🔄 手动同步</button>
+      </div>
         <div id="sessTableContainer"></div>
       </div>
     </div>
@@ -2373,8 +2376,10 @@ async function _sbSyncToSupabase(localKey, data){
     delete sbDirtyTimestamps[localKey];
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
+    showSyncStatus('已同步 '+tableName+' '+data.length+'条', 'synced');
   } catch(e){
-    console.warn('[Supabase] 同步', localKey, '异常:', e);
+    console.error('[Supabase] 同步', localKey, '异常:', e);
+    showSyncStatus('同步失败: '+localKey, 'error');
     // 上传失败时重新标记脏表（双重保险：delete已移到成功后，这里主要是catch路径）
     sbDirtyTables.add(localKey);
     sbDirtyTimestamps[localKey] = Date.now();
@@ -2808,6 +2813,27 @@ function subscribeToSupabaseChanges(){
       console.warn('[Supabase] 实时订阅超时，依赖轮询同步');
     }
   });
+}
+
+
+async function manualSync(){
+  if(!sbClient || !sbConnected){ toast('云端未连接'); return; }
+  showSyncStatus('正在同步...', 'syncing');
+  try {
+    // 先上传
+    for(const localKey of Object.keys(SB_TABLE_MAP)){
+      const data = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
+      if(data.length > 0){
+        await _sbSyncToSupabase(localKey, data);
+      }
+    }
+    // 再下载
+    await syncFromSupabase(true);
+    toast('✓ 同步完成');
+  } catch(e){
+    console.error('[Sync] 手动同步失败:', e);
+    toast('✗ 同步失败: ' + e.message);
+  }
 }
 
 // ---------- 手动上传 ----------
