@@ -658,7 +658,6 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
         <div class="card-title">场次录入 <span class="badge" id="sessBadge">0场</span></div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="openSessionModal()">+ 新增场次</button>
-        <button class="btn btn-secondary" onclick="manualSync()" style="font-size:11px;padding:6px 12px">🔄 手动同步</button>
       </div>
         <div id="sessTableContainer"></div>
       </div>
@@ -1285,11 +1284,30 @@ function refreshAllPanels() {
 // 统一的保存后处理：刷新所有面板 + 触发云端同步 + 提示
 function afterSave(msg) {
   refreshAllPanels();
-  // v145: 保存后立即触发云端同步（异步，不阻塞UI），延迟缩短确保云端数据即时回拉
-  if(sbClient && sbConnected){
+  // v185: 保存后立即触发云端上传+下载，确保数据自动同步
+  if(sbClient){
+    showSyncStatus('⏳ 同步中...', 'syncing');
+    // 立即检查并重试所有脏表
+    _retryDirtySync();
+    // 500ms后拉取云端最新数据
     setTimeout(()=>{ syncFromSupabase(false); }, 500);
   }
   if (msg) toast(msg);
+}
+
+// v185: 重试所有脏表同步
+async function _retryDirtySync(){
+  if(!sbClient || sbDirtyTables.size === 0) return;
+  const dirtyKeys = [...sbDirtyTables];
+  console.log('[v185] 重试脏表同步:', dirtyKeys);
+  for(const key of dirtyKeys){
+    const data = DB._g(key);
+    try {
+      await _sbSyncToSupabase(key, data);
+    } catch(e){
+      console.warn('[v185] 重试同步', key, '失败:', e);
+    }
+  }
 }
 
 // ========================================
@@ -1588,7 +1606,9 @@ function showSyncStatus(msg, type){
   if(!el) return;
   el.textContent = msg;
   el.className = 'sync-status show ' + type;
-  setTimeout(()=>{ el.className = 'sync-status ' + type; }, 2000);
+  // v185: 成功/失败状态显示更久，让用户能看到
+  const duration = (type === 'syncing') ? 1500 : 3000;
+  setTimeout(()=>{ el.className = 'sync-status ' + type; }, duration);
 }
 
 function updateCloudBadge(connected){
@@ -2231,6 +2251,7 @@ async function _sbSyncToSupabase(localKey, data){
     return;
   }
   sbSelfTriggering = true; // 标记自触发，防止实时订阅拉取形成反馈循环
+  showSyncStatus('⏳ 正在上传 ' + localKey + '...', 'syncing');
 
   try {
     // ===== employees：拆分到 profiles + employees =====
@@ -7523,10 +7544,14 @@ async function postLoginInit(){
     // 启动实时订阅
     subscribeToSupabaseChanges();
     
-    // v164: 轮询兜底：每3秒拉取一次云端数据（原10秒太慢）
+    // v185: 轮询兜底：每3秒拉取云端 + 重试脏表上传
     if(_pollingInterval) clearInterval(_pollingInterval);
     _pollingInterval = setInterval(()=>{
-      if(!document.hidden && sbClient && (adminLoggedIn || currentEmp)) syncFromSupabase(false);
+      if(!document.hidden && sbClient && (adminLoggedIn || currentEmp)){
+        syncFromSupabase(false);
+        // v185: 如果有脏表未同步成功，自动重试上传
+        if(sbDirtyTables.size > 0) _retryDirtySync();
+      }
     }, 3000);
     
     // 切换到前台时立即同步
