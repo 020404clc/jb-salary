@@ -852,19 +852,17 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
       <div class="form-group"><label>人数</label><input type="number" id="s_players" placeholder="6"></div>
       <div class="form-group"><label>单价(元)</label><input type="number" id="s_price" placeholder="128"></div>
     </div>
-    <div class="form-row">
-      <div class="form-group"><label>实收金额</label><input type="number" id="s_actual" placeholder="0"></div>
-      <div class="form-group"><label>扣卡金额</label><input type="number" id="s_deduction" placeholder="0" oninput="updateCardBalanceDisplay()"></div>
-    </div>
-    <div class="form-group" style="position:relative">
-      <label>会员卡 <span id="cardBalanceHint" style="color:var(--text2);font-weight:normal"></span></label>
-      <input type="text" id="s_cardSearch" placeholder="输入手机号搜索或展开选择会员卡..." onfocus="openCardDropdown()" oninput="filterCardDropdown()" onblur="closeCardDropdown()" autocomplete="off">
-      <input type="hidden" id="s_deductedCardPhone" value="">
-      <div id="s_cardDropdown" style="display:none;position:absolute;left:0;right:0;max-height:200px;overflow-y:auto;background:var(--card2);border:1px solid var(--border);border-radius:0 0 8px 8px;z-index:300;font-size:12px"></div>
-      <div id="s_cardInfo" style="display:none;margin-top:4px;padding:6px 8px;background:var(--card2);border-radius:6px;font-size:11px;display:none;align-items:center;justify-content:space-between">
-        <span id="s_cardInfoText"></span>
-        <button type="button" class="btn btn-danger btn-sm" onclick="clearCardSelection()" style="font-size:10px;padding:2px 8px">取消</button>
+    <div class="form-group"><label>实收金额</label><input type="number" id="s_actual" placeholder="0"></div>
+    <div class="form-group">
+      <label>会员卡扣卡 <span id="cardBalanceHint" style="color:var(--text2);font-weight:normal"></span></label>
+      <div id="cardEntriesContainer" style="margin-bottom:6px"></div>
+      <div style="position:relative;display:inline-block">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="openCardDropdown()">+ 添加会员卡</button>
+        <input type="text" id="s_cardSearch" placeholder="搜索手机号..." onfocus="openCardDropdown()" oninput="filterCardDropdown()" onblur="closeCardDropdown()" autocomplete="off" style="display:none;position:absolute;left:0;top:0;width:100%;padding:5px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--input);color:var(--text);z-index:301">
+        <div id="s_cardDropdown" style="display:none;position:absolute;left:0;right:0;min-width:220px;max-height:200px;overflow-y:auto;background:var(--card2);border:1px solid var(--border);border-radius:0 0 8px 8px;z-index:300;font-size:12px"></div>
       </div>
+      <input type="hidden" id="s_deductedCardPhone" value="">
+      <div style="margin-top:6px;font-size:12px;color:var(--text2)">扣卡合计: <strong id="totalDeductionDisplay" style="color:var(--accent)">¥0</strong> <span style="margin-left:4px;font-size:10px">(提成基数=实收+扣卡合计)</span></div>
     </div>
     <div class="form-group"><label>服装编号</label><input type="text" id="s_costume" placeholder="可选"></div>
     <div class="form-group"><label>备注</label><textarea id="s_notes" placeholder="可选"></textarea></div>
@@ -1798,12 +1796,15 @@ async function syncFromSupabase(showToast){
           local.deductedCardPhone = sr.deducted_card_phone || '';
           local.chargeAmount = sr.costume || 0;
           local.costumeId = '';
+          local.deductionEntries = [];
           if(sr.notes){
             const costumeMatch = sr.notes.match(/\[costumeId:([^\]]+)\]/);
             if(costumeMatch) local.costumeId = costumeMatch[1];
+            const deMatch = sr.notes.match(/\[deductionEntries:([^\]]+)\]/);
+            if(deMatch){try{local.deductionEntries=JSON.parse(decodeURIComponent(deMatch[1]));}catch(e){console.warn('[Supabase] parse deductionEntries failed:',e);}}
           }
           local.chargeEntries = [];
-          local.notes = (sr.notes || '').replace(/\s*\[costumeId:[^\]]*\]/g, '').trim();
+          local.notes = (sr.notes || '').replace(/\s*\[costumeId:[^\]]*\]/g, '').replace(/\s*\[deductionEntries:[^\]]*\]/g, '').trim();
           local.createdBy = empIdReverseMap[sr.created_by] || sr.created_by;
           local.dms = dmMap[sr.id] || [];
           delete local.script_id; delete local.start_time; delete local.end_time;
@@ -2485,8 +2486,9 @@ async function _sbSyncSessions(data){
       deduction_amount: sess.deductionAmount || 0,
       deducted_card_phone: sess.deductedCardPhone || '',
       costume: sess.chargeAmount || 0,
-      notes: (sess.notes || '').replace(/\s*\[costumeId:[^\]]*\]/g, '')
-        + (sess.costumeId ? ' [costumeId:'+sess.costumeId+']' : ''),
+      notes: (sess.notes || '').replace(/\s*\[costumeId:[^\]]*\]/g, '').replace(/\s*\[deductionEntries:[^\]]*\]/g, '')
+        + (sess.costumeId ? ' [costumeId:'+sess.costumeId+']' : '')
+        + (sess.deductionEntries && sess.deductionEntries.length ? ' [deductionEntries:'+encodeURIComponent(JSON.stringify(sess.deductionEntries))+']' : ''),
       created_by: profileIdMap[sess.createdBy] || null
     };
     let cloudSessId = null;
@@ -3833,7 +3835,7 @@ function renderSessionTable(){
       </div>
       <div id="sd_${s.id}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);font-size:11px;color:var(--text2);line-height:1.8">
         <div>房号: ${s.room||'-'} | 单价: &yen;${s.unitPrice||'-'}</div>
-        <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡: ¥'+s.deductionAmount+' (尾号'+(s.deductedCardPhone||'?')+')':''}</div>
+        <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡合计: ¥'+s.deductionAmount+(s.deductionEntries&&s.deductionEntries.length?' ('+s.deductionEntries.map(e=>'尾号'+e.phone+' ¥'+e.amount).join(' + ')+')':' (尾号'+(s.deductedCardPhone||'?')+')') :''}</div>
         <div>服装: ${s.costumeId||'-'}</div>
         <div>DM详情: ${s.dms.map(d=>empName(d.employeeId)+'('+d.effectiveHours+'h, 加时¥'+(d.overtimeFeePerPerson||0)+'/人)').join(', ')}</div>
         ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').replace(/\s*\[costumeId:[^\]]*\]/g,'').trim())+'</div>':''}
@@ -4462,7 +4464,7 @@ function renderSalarySessionDetail(){
           </div>
           <div style="background:var(--bg);padding:4px 6px;border-radius:4px">
             <span style="color:var(--text2)">扣卡金额</span>
-            <span style="float:right;font-weight:600${d.deductionAmount?'color:var(--info)':''}">&yen;${d.deductionAmount||0}${d.deductedCardPhone?' (尾号'+d.deductedCardPhone+')':''}</span>
+            <span style="float:right;font-weight:600${d.deductionAmount?'color:var(--info)':''}">&yen;${d.deductionAmount||0}${d.deductionEntries&&d.deductionEntries.length?' ('+d.deductionEntries.map(e=>'尾号'+e.phone+' ¥'+e.amount).join('+')+')':(d.deductedCardPhone?' (尾号'+d.deductedCardPhone+')':'')}</span>
           </div>
           <div style="background:var(--bg);padding:4px 6px;border-radius:4px">
             <span style="color:var(--text2)">熟练度加成</span>
@@ -5425,10 +5427,10 @@ function openSessionModal(editId){
   document.getElementById('s_players').value='';
   document.getElementById('s_price').value='';
   document.getElementById('s_actual').value='';
-  document.getElementById('s_deduction').value='';
   document.getElementById('s_cardSearch').value='';
   document.getElementById('s_deductedCardPhone').value='';
   document.getElementById('cardBalanceHint').textContent='';
+  clearCardEntries();
   document.getElementById('s_costume').value='';
   document.getElementById('s_notes').value='';
   document.getElementById('s_scheduleLink_group').style.display='none';
@@ -5459,12 +5461,16 @@ function openSessionModal(editId){
       document.getElementById('s_players').value=s.playerCount;
       document.getElementById('s_price').value=s.unitPrice;
       document.getElementById('s_actual').value=s.actualAmount;
-      document.getElementById('s_deduction').value=s.deductionAmount||0;
-      document.getElementById('s_deductedCardPhone').value=s.deductedCardPhone||'';
-      if(s.deductedCardPhone){
-        document.getElementById('s_cardSearch').value='尾号 '+s.deductedCardPhone;
-        updateCardBalanceDisplay();
+      // Restore multi-card entries
+      clearCardEntries();
+      if(s.deductionEntries&&Array.isArray(s.deductionEntries)&&s.deductionEntries.length){
+        currentCardEntries=s.deductionEntries.map(e=>({phone:e.phone,amount:e.amount||0}));
+      }else if(s.deductedCardPhone){
+        // Backward compat: single card
+        currentCardEntries=[{phone:s.deductedCardPhone,amount:s.deductionAmount||0}];
       }
+      renderCardEntries();
+      updateTotalDeduction();
       document.getElementById('s_costume').value=s.costumeId||'';
       document.getElementById('s_notes').value=s.notes||'';
       document.getElementById('dmEntriesContainer').innerHTML='';
@@ -5549,8 +5555,10 @@ function saveSession(){
   const playerCount=parseInt(document.getElementById('s_players').value)||0;
   const unitPrice=parseFloat(document.getElementById('s_price').value)||0;
   const actualAmount=parseFloat(document.getElementById('s_actual').value)||0;
-  const deductionAmount=parseFloat(document.getElementById('s_deduction').value)||0;
-  const deductedCardPhone=document.getElementById('s_deductedCardPhone').value;
+  // Multi-card deduction: sum all card entries
+  const deductionEntries=currentCardEntries.filter(e=>e.amount>0).map(e=>({phone:e.phone,amount:e.amount}));
+  const deductionAmount=deductionEntries.reduce((sum,e)=>sum+e.amount,0);
+  const deductedCardPhone=deductionEntries.map(e=>e.phone).join(',');
   const costumeId=sanitizeText(document.getElementById('s_costume').value);
   const notes=sanitizeText(document.getElementById('s_notes').value);
   const editId=document.getElementById('s_editId').value;
@@ -5581,7 +5589,7 @@ function saveSession(){
   const sessions=DB.getSessions();
   const sessionData={
     scriptId,date,endDate,startTime,endTime,room,playerCount,unitPrice,
-    actualAmount,deductionAmount,deductedCardPhone,chargeAmount:0,chargeEntries:[],
+    actualAmount,deductionAmount,deductedCardPhone,deductionEntries,chargeAmount:0,chargeEntries:[],
     costumeId,notes,dms
   };
   if(createdBy)sessionData.createdBy=parseInt(createdBy);
@@ -6512,7 +6520,7 @@ function renderEmpSessions(){
       </div>
       <div id="esd_${s.id}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);font-size:11px;color:var(--text2);line-height:1.8">
         <div>房号: ${s.room||'-'} | 人数: ${s.playerCount} | 单价: &yen;${s.unitPrice||'-'}</div>
-        <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡: ¥'+s.deductionAmount+' (尾号'+(s.deductedCardPhone||'?')+')':''}</div>
+        <div>实收: &yen;${s.actualAmount||0}${s.deductionAmount?' | 扣卡合计: ¥'+s.deductionAmount+(s.deductionEntries&&s.deductionEntries.length?' ('+s.deductionEntries.map(e=>'尾号'+e.phone+' ¥'+e.amount).join(' + ')+')':' (尾号'+(s.deductedCardPhone||'?')+')') :''}</div>
         <div>加时费/人: &yen;${dm?.overtimeFeePerPerson||0}</div>
         <div>DM: ${s.dms.map(d=>empName(d.employeeId)+'('+d.effectiveHours+'h)').join(', ')}</div>
         ${s.notes?'<div>备注: '+(s.notes.replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').replace(/\s*\[costumeId:[^\]]*\]/g,'').trim())+'</div>':''}
@@ -6576,10 +6584,10 @@ function openEmpSessionModal(editId){
   document.getElementById('s_players').value='';
   document.getElementById('s_price').value='';
   document.getElementById('s_actual').value='';
-  document.getElementById('s_deduction').value='';
   document.getElementById('s_cardSearch').value='';
   document.getElementById('s_deductedCardPhone').value='';
   document.getElementById('cardBalanceHint').textContent='';
+  clearCardEntries();
   document.getElementById('s_costume').value='';
   document.getElementById('s_notes').value='';
   document.getElementById('s_scheduleLink_group').style.display='none';
@@ -6610,12 +6618,15 @@ function openEmpSessionModal(editId){
       document.getElementById('s_players').value=s.playerCount;
       document.getElementById('s_price').value=s.unitPrice;
       document.getElementById('s_actual').value=s.actualAmount;
-      document.getElementById('s_deduction').value=s.deductionAmount||0;
-      document.getElementById('s_deductedCardPhone').value=s.deductedCardPhone||'';
-      if(s.deductedCardPhone){
-        document.getElementById('s_cardSearch').value='尾号 '+s.deductedCardPhone;
-        updateCardBalanceDisplay();
+      // Restore multi-card entries
+      clearCardEntries();
+      if(s.deductionEntries&&Array.isArray(s.deductionEntries)&&s.deductionEntries.length){
+        currentCardEntries=s.deductionEntries.map(e=>({phone:e.phone,amount:e.amount||0}));
+      }else if(s.deductedCardPhone){
+        currentCardEntries=[{phone:s.deductedCardPhone,amount:s.deductionAmount||0}];
       }
+      renderCardEntries();
+      updateTotalDeduction();
       document.getElementById('s_costume').value=s.costumeId||'';
       document.getElementById('s_notes').value=s.notes||'';
       document.getElementById('dmEntriesContainer').innerHTML='';
@@ -7237,8 +7248,11 @@ async function _forcePullAllTables(){
       });
       const sessions = sessRows.map(sr => {
         const dms = dmMap[sr.id] || [];
-        let notes = (sr.notes||'').replace(/\s*\[costumeId:[^\]]*\]/g, '').trim();
+        let notes = (sr.notes||'').replace(/\s*\[costumeId:[^\]]*\]/g, '').replace(/\s*\[deductionEntries:[^\]]*\]/g, '').trim();
         const costumeMatch = (sr.notes||'').match(/\[costumeId:([^\]]+)\]/);
+        let deductionEntries = [];
+        const deMatch = (sr.notes||'').match(/\[deductionEntries:([^\]]+)\]/);
+        if(deMatch){try{deductionEntries=JSON.parse(decodeURIComponent(deMatch[1]));}catch(e){}}
         return {
           id: sr.local_id != null ? sr.local_id : undefined,
           scriptId: sr.script_id,
@@ -7249,8 +7263,10 @@ async function _forcePullAllTables(){
           unitPrice: sr.price,
           actualAmount: sr.actual_amount,
           deductionAmount: sr.deduction_amount || 0,
+          deductedCardPhone: sr.deducted_card_phone || '',
           chargeAmount: sr.costume || 0,
           costumeId: costumeMatch ? costumeMatch[1] : '',
+          deductionEntries: deductionEntries,
           notes: notes,
           dms: dms
         };
@@ -7601,13 +7617,24 @@ function clearAllTDRecords(){
 }
 
 // ========================================
-// CARD BALANCE & SESSION CARD SELECTOR
+// CARD BALANCE & MULTI-CARD SESSION SELECTOR
 // ========================================
+// currentCardEntries: [{phone, amount}] - tracks cards selected for current session
+let currentCardEntries=[];
+
 function getCardBalance(phone){
   if(!phone)return 0;
   let balance=0;
   DB.getRecharges().filter(r=>r.phone===phone).forEach(r=>{balance+=r.amount;});
-  DB.getSessions().filter(s=>s.deductedCardPhone===phone).forEach(s=>{balance-=(s.deductionAmount||0);});
+  // Deduct from all sessions (support both old single-card and new multi-card format)
+  DB.getSessions().forEach(s=>{
+    if(s.deductionEntries&&Array.isArray(s.deductionEntries)){
+      const entry=s.deductionEntries.find(e=>e.phone===phone);
+      if(entry)balance-=(entry.amount||0);
+    }else if(s.deductedCardPhone===phone){
+      balance-=(s.deductionAmount||0);
+    }
+  });
   return Math.round(balance*100)/100;
 }
 
@@ -7620,13 +7647,19 @@ function getAllCards(){
 }
 
 function openCardDropdown(){
-  document.getElementById('s_cardSearch').value='';
+  const searchEl=document.getElementById('s_cardSearch');
+  searchEl.style.display='block';
+  searchEl.value='';
+  searchEl.focus();
   renderCardDropdownItems(getAllCards());
   document.getElementById('s_cardDropdown').style.display='block';
 }
 
 function closeCardDropdown(){
-  setTimeout(()=>{document.getElementById('s_cardDropdown').style.display='none';},200);
+  setTimeout(()=>{
+    document.getElementById('s_cardDropdown').style.display='none';
+    document.getElementById('s_cardSearch').style.display='none';
+  },200);
 }
 
 function filterCardDropdown(){
@@ -7639,7 +7672,11 @@ function filterCardDropdown(){
 function renderCardDropdownItems(cards){
   const el=document.getElementById('s_cardDropdown');
   if(!cards.length){el.innerHTML='<div style="padding:8px;color:var(--text2);text-align:center">无匹配会员卡</div>';return;}
-  el.innerHTML=cards.map(c=>{
+  // Filter out already-added cards
+  const addedPhones=currentCardEntries.map(e=>e.phone);
+  const available=cards.filter(c=>!addedPhones.includes(c.phone));
+  if(!available.length){el.innerHTML='<div style="padding:8px;color:var(--text2);text-align:center">所有会员卡已添加</div>';return;}
+  el.innerHTML=available.map(c=>{
     const bal=getCardBalance(c.phone);
     const dm=c.dmId?empName(c.dmId):'';
     const balColor=bal<0?'color:var(--accent)':'color:var(--success)';
@@ -7651,28 +7688,53 @@ function renderCardDropdownItems(cards){
 }
 
 function selectCard(phone){
-  document.getElementById('s_cardSearch').value='尾号 '+phone;
-  document.getElementById('s_deductedCardPhone').value=phone;
+  // Add card to entries with amount=0
+  currentCardEntries.push({phone:phone,amount:0});
   document.getElementById('s_cardDropdown').style.display='none';
-  updateCardBalanceDisplay();
+  document.getElementById('s_cardSearch').style.display='none';
+  renderCardEntries();
+  updateTotalDeduction();
 }
 
-function clearCardSelection(){
-  document.getElementById('s_cardSearch').value='';
-  document.getElementById('s_deductedCardPhone').value='';
-  document.getElementById('s_cardInfo').style.display='none';
-  document.getElementById('cardBalanceHint').textContent='';
+function removeCardEntry(idx){
+  currentCardEntries.splice(idx,1);
+  renderCardEntries();
+  updateTotalDeduction();
 }
 
-function updateCardBalanceDisplay(){
-  const phone=document.getElementById('s_deductedCardPhone').value;
-  const hint=document.getElementById('cardBalanceHint');
-  if(!phone){hint.textContent='';return;}
-  const bal=getCardBalance(phone);
-  const deduction=parseFloat(document.getElementById('s_deduction').value)||0;
-  const afterBal=bal-deduction;
-  const afterColor=afterBal<0?'var(--accent)':'var(--success)';
-  hint.innerHTML='当前余额 <strong style="color:'+(bal<0?'var(--accent)':'var(--success)')+'">¥'+bal.toFixed(2)+'</strong> → 扣后 <strong style="color:'+afterColor+'">¥'+afterBal.toFixed(2)+'</strong>';
+function onCardEntryAmountChange(idx,val){
+  currentCardEntries[idx].amount=parseFloat(val)||0;
+  updateTotalDeduction();
+}
+
+function renderCardEntries(){
+  const container=document.getElementById('cardEntriesContainer');
+  if(!currentCardEntries.length){container.innerHTML='';return;}
+  container.innerHTML=currentCardEntries.map((entry,idx)=>{
+    const bal=getCardBalance(entry.phone);
+    const balColor=bal<0?'color:var(--accent)':'color:var(--success)';
+    return`<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:6px 8px;background:var(--card2);border-radius:6px;font-size:12px">
+      <span style="flex-shrink:0">尾号 ${entry.phone}</span>
+      <span style="${balColor};font-size:10px;flex-shrink:0">余¥${bal.toFixed(0)}</span>
+      <input type="number" value="${entry.amount||0}" oninput="onCardEntryAmountChange(${idx},this.value)" placeholder="扣款" style="flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:13px;background:var(--input);color:var(--text);text-align:right">
+      <span style="flex-shrink:0;color:var(--text2)">元</span>
+      <button type="button" onclick="removeCardEntry(${idx})" class="btn btn-danger btn-sm" style="flex-shrink:0;font-size:10px;padding:2px 6px">×</button>
+    </div>`;
+  }).join('');
+}
+
+function updateTotalDeduction(){
+  const total=currentCardEntries.reduce((sum,e)=>sum+(e.amount||0),0);
+  document.getElementById('totalDeductionDisplay').innerHTML='¥'+total.toFixed(0);
+  // Update hidden field for backward compat
+  document.getElementById('s_deductedCardPhone').value=currentCardEntries.map(e=>e.phone).join(',');
+}
+
+function clearCardEntries(){
+  currentCardEntries=[];
+  renderCardEntries();
+  updateTotalDeduction();
+  document.getElementById('totalDeductionDisplay').innerHTML='¥0';
 }
 
 // ========================================
