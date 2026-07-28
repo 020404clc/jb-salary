@@ -2019,10 +2019,12 @@ async function syncFromSupabase(showToast){
                 var empMatch = r.note.match(/\[empLocalId:(\d+)\]/);
                 if(empMatch) r.employeeId = parseInt(empMatch[1]);
               }
-              // v178: 从 note 解码 target 和 delta
-              if(r.note){
+              // v180: target/delta 已有实际列，仅在列值为空时从 note 兜底
+              if((r.target == null || r.target === '') && r.note){
                 var targetMatch = r.note.match(/\[target:([^\]]+)\]/);
                 if(targetMatch) r.target = targetMatch[1];
+              }
+              if((r.delta == null || r.delta === undefined) && r.note){
                 var deltaMatch = r.note.match(/\[delta:([^\]]+)\]/);
                 if(deltaMatch) r.delta = parseFloat(deltaMatch[1]);
               }
@@ -2338,15 +2340,9 @@ async function _sbSyncToSupabase(localKey, data){
           cloudRow.note = cloudRow.note.trim();
           delete cloudRow.type;
         }
-        // v178: td_adjustments — 云端缺 target/delta 列，编码到 note
+        // v180: td_adjustments — target/delta 已有实际列，直接使用列值，不再编码到 note
         if(localKey === 'td_adjustments'){
-          cloudRow.note = (cloudRow.note || '')
-            .replace(/\s*\[target:[^\]]*\]/g, '')
-            .replace(/\s*\[delta:[^\]]*\]/g, '');
-          if(row.target) cloudRow.note += ' [target:'+row.target+']';
-          if(row.delta !== undefined && row.delta !== null) cloudRow.note += ' [delta:'+row.delta+']';
-          cloudRow.note = cloudRow.note.trim();
-          delete cloudRow.target; delete cloudRow.delta;
+          // target 和 delta 作为实际列存在，无需编码到 note
         }
         if(localKey === 'recharges' && cloudRow.dm_id !== undefined && cloudRow.dm_id !== null){
           cloudRow.dm_id = empIdMap[cloudRow.dm_id] || null;
@@ -7397,12 +7393,17 @@ async function _forcePullAllTables(){
               if(typeMatch) local.type = typeMatch[1];
             }
             if(key === 'td_adjustments'){
-              // v178: 从 note 解码 target 和 delta
-              var noteStrAdj = r.note || local.note || '';
-              var targetMatchAdj = noteStrAdj.match(/\[target:([^\]]+)\]/);
-              if(targetMatchAdj) local.target = targetMatchAdj[1];
-              var deltaMatchAdj = noteStrAdj.match(/\[delta:([^\]]+)\]/);
-              if(deltaMatchAdj) local.delta = parseFloat(deltaMatchAdj[1]);
+              // v180: target/delta 已有实际列，仅在列值为空时从 note 兜底
+              if((local.target == null || local.target === '') && (r.note || local.note)){
+                var noteStrAdj = r.note || local.note || '';
+                var targetMatchAdj = noteStrAdj.match(/\[target:([^\]]+)\]/);
+                if(targetMatchAdj) local.target = targetMatchAdj[1];
+              }
+              if((local.delta == null || local.delta === undefined) && (r.note || local.note)){
+                var noteStrAdj2 = r.note || local.note || '';
+                var deltaMatchAdj = noteStrAdj2.match(/\[delta:([^\]]+)\]/);
+                if(deltaMatchAdj) local.delta = parseFloat(deltaMatchAdj[1]);
+              }
               local.note = (local.note || '').replace(/\s*\[empLocalId:[^\]]*\]/g,'').replace(/\s*\[target:[^\]]*\]/g,'').replace(/\s*\[delta:[^\]]*\]/g,'').trim();
             }
             if(key === 'recharges'){
