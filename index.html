@@ -2492,14 +2492,8 @@ async function _sbSyncSessions(data){
   const profileIdMap = await _sbGetProfileIdMap();
 
   const localIds = new Set((data || []).map(d => d.id));
-  // 删除本地不存在的 sessions
-  if(existingSess){
-    const toDelete = existingSess.filter(s => s.local_id !== null && !localIds.has(s.local_id));
-    for(const del of toDelete){
-      await sbClient.from('session_dm').delete().eq('session_id', del.id);
-      await sbClient.from('sessions').delete().eq('id', del.id);
-    }
-  }
+  // v180: 延迟删除到 upsert 成功后执行，避免上传失败时本地数据被误删
+  const toDelete = existingSess ? existingSess.filter(s => s.local_id !== null && !localIds.has(s.local_id)) : [];
 
   for(const sess of (data || [])){
     const sessCloud = {
@@ -2559,6 +2553,12 @@ async function _sbSyncSessions(data){
         console.error('[Supabase] 场次', sess.id, '的所有DM都无法映射到云端员工，请先确保员工已同步到云端');
       }
     }
+  }
+
+  // v180: upsert 成功后才删除本地已不存在的云端场次
+  for(const del of toDelete){
+    await sbClient.from('session_dm').delete().eq('session_id', del.id);
+    await sbClient.from('sessions').delete().eq('id', del.id);
   }
 }
 
