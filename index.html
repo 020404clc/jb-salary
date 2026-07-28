@@ -5466,6 +5466,9 @@ function openSessionModal(editId){
   document.getElementById('s_price').value='';
   document.getElementById('s_actual').value='';
   document.getElementById('s_cardSearch').value='';
+  var _csb=document.getElementById('cardSearchBtn');if(_csb)_csb.style.display='flex';
+  var _csw=document.getElementById('cardSearchWrapper');if(_csw)_csw.style.display='none';
+  var _csd=document.getElementById('s_cardDropdown');if(_csd)_csd.style.display='none';
   document.getElementById('s_deductedCardPhone').value='';
   document.getElementById('cardBalanceHint').textContent='';
   clearCardEntries();
@@ -6631,6 +6634,9 @@ function openEmpSessionModal(editId){
   document.getElementById('s_price').value='';
   document.getElementById('s_actual').value='';
   document.getElementById('s_cardSearch').value='';
+  var _csb=document.getElementById('cardSearchBtn');if(_csb)_csb.style.display='flex';
+  var _csw=document.getElementById('cardSearchWrapper');if(_csw)_csw.style.display='none';
+  var _csd=document.getElementById('s_cardDropdown');if(_csd)_csd.style.display='none';
   document.getElementById('s_deductedCardPhone').value='';
   document.getElementById('cardBalanceHint').textContent='';
   clearCardEntries();
