@@ -871,10 +871,17 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
     <div class="form-group">
       <label>会员卡扣卡 <span id="cardBalanceHint" style="color:var(--text2);font-weight:normal"></span></label>
       <div id="cardEntriesContainer" style="margin-bottom:8px"><div style="text-align:center;color:var(--text2);padding:12px 0;font-size:12px;opacity:0.6">— 暂未添加会员卡 —</div></div>
-      <div style="position:relative;display:inline-block">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="openCardDropdown()" style="background:linear-gradient(135deg,rgba(233,69,96,0.15),rgba(233,69,96,0.05));border:1px dashed rgba(233,69,96,0.3);color:var(--accent);padding:6px 14px;border-radius:8px;font-size:12px;cursor:pointer;transition:all 0.2s" onmouseover="this.style.background='linear-gradient(135deg,rgba(233,69,96,0.25),rgba(233,69,96,0.1))'" onmouseout="this.style.background='linear-gradient(135deg,rgba(233,69,96,0.15),rgba(233,69,96,0.05))'">+ 添加会员卡</button>
-        <input type="text" id="s_cardSearch" placeholder="搜索手机号..." onfocus="openCardDropdown()" oninput="filterCardDropdown()" onblur="closeCardDropdown()" autocomplete="off" style="display:none;position:absolute;left:0;top:0;width:100%;padding:6px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--input);color:var(--text);z-index:301">
-        <div id="s_cardDropdown" style="display:none;position:absolute;left:0;right:0;min-width:220px;max-height:200px;overflow-y:auto;background:var(--card2);border:1px solid var(--border);border-radius:0 0 8px 8px;z-index:300;font-size:12px"></div>
+      <div style="position:relative;display:inline-block;width:100%;max-width:280px">
+        <button type="button" id="cardSearchBtn" onclick="openCardDropdown()" style="width:100%;background:linear-gradient(135deg,rgba(233,69,96,0.12),rgba(233,69,96,0.04));border:1.5px dashed rgba(233,69,96,0.35);color:var(--accent);padding:10px 16px;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;transition:all 0.25s;display:flex;align-items:center;justify-content:center;gap:6px" onmouseover="this.style.background='linear-gradient(135deg,rgba(233,69,96,0.22),rgba(233,69,96,0.1))';this.style.borderColor='rgba(233,69,96,0.5)'" onmouseout="this.style.background='linear-gradient(135deg,rgba(233,69,96,0.12),rgba(233,69,96,0.04))';this.style.borderColor='rgba(233,69,96,0.35)'">
+          <span style="font-size:16px;line-height:1"></span> 添加会员卡
+        </button>
+        <div id="cardSearchWrapper" style="display:none;position:relative">
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:15px;opacity:0.5"></span>
+            <input type="text" id="s_cardSearch" placeholder="搜索手机号..." oninput="filterCardDropdown()" onblur="closeCardDropdown()" autocomplete="off" style="width:100%;padding:10px 14px 10px 38px;border:1.5px solid rgba(233,69,96,0.4);border-radius:10px;font-size:14px;background:var(--input);color:var(--text);outline:none;transition:border-color 0.2s,box-shadow 0.2s;box-sizing:border-box">
+          </div>
+          <div id="s_cardDropdown" style="display:none;position:absolute;left:0;right:0;min-width:260px;max-height:260px;overflow-y:auto;background:linear-gradient(180deg,#1a1a3e 0%,#16213e 100%);border:1px solid var(--border);border-radius:12px;z-index:300;font-size:13px;box-shadow:0 8px 32px rgba(0,0,0,0.4),0 0 0 1px rgba(255,255,255,0.03);margin-top:6px;backdrop-filter:blur(10px)"></div>
+        </div>
       </div>
       <input type="hidden" id="s_deductedCardPhone" value="">
       <div style="margin-top:10px;padding:8px 12px;background:rgba(233,69,96,0.06);border:1px solid rgba(233,69,96,0.12);border-radius:8px;font-size:12px;color:var(--text2);display:flex;align-items:center;justify-content:space-between">
@@ -7698,18 +7705,23 @@ function getAllCards(){
 }
 
 function openCardDropdown(){
+  const btn=document.getElementById('cardSearchBtn');
+  const wrapper=document.getElementById('cardSearchWrapper');
   const searchEl=document.getElementById('s_cardSearch');
-  searchEl.style.display='block';
+  const dropdown=document.getElementById('s_cardDropdown');
+  btn.style.display='none';
+  wrapper.style.display='block';
   searchEl.value='';
-  searchEl.focus();
   renderCardDropdownItems(getAllCards());
-  document.getElementById('s_cardDropdown').style.display='block';
+  dropdown.style.display='block';
+  setTimeout(()=>searchEl.focus(),50);
 }
 
 function closeCardDropdown(){
   setTimeout(()=>{
     document.getElementById('s_cardDropdown').style.display='none';
-    document.getElementById('s_cardSearch').style.display='none';
+    document.getElementById('cardSearchWrapper').style.display='none';
+    document.getElementById('cardSearchBtn').style.display='flex';
   },200);
 }
 
@@ -7722,28 +7734,38 @@ function filterCardDropdown(){
 
 function renderCardDropdownItems(cards){
   const el=document.getElementById('s_cardDropdown');
-  if(!cards.length){el.innerHTML='<div style="padding:12px;color:var(--text2);text-align:center;font-size:12px">无匹配会员卡</div>';return;}
+  if(!cards.length){el.innerHTML='<div style="padding:20px 16px;text-align:center"><div style="font-size:24px;margin-bottom:6px;opacity:0.3">🃏</div><div style="color:var(--text2);font-size:12px">无匹配会员卡</div></div>';return;}
   const addedPhones=currentCardEntries.map(e=>e.phone);
   const available=cards.filter(c=>!addedPhones.includes(c.phone));
-  if(!available.length){el.innerHTML='<div style="padding:12px;color:var(--text2);text-align:center;font-size:12px">所有会员卡已添加</div>';return;}
-  el.innerHTML=available.map(c=>{
+  if(!available.length){el.innerHTML='<div style="padding:20px 16px;text-align:center"><div style="font-size:24px;margin-bottom:6px;opacity:0.3">✅</div><div style="color:var(--text2);font-size:12px">所有会员卡已添加</div></div>';return;}
+  let html='<div style="padding:10px 14px 8px;border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center"><span style="font-size:11px;color:var(--text2);font-weight:500;letter-spacing:0.5px;text-transform:uppercase">可选会员卡</span><span style="font-size:11px;color:var(--accent);background:rgba(233,69,96,0.12);padding:2px 8px;border-radius:10px;font-weight:600">'+available.length+'张</span></div>';
+  html+=available.map(c=>{
     const bal=getCardBalance(c.phone);
     const dm=c.dmId?empName(c.dmId):'';
     const balColor=bal<0?'var(--accent)':'var(--success)';
-    return`<div onclick="selectCard('${c.phone}')" style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background 0.15s" onmouseover="this.style.background='rgba(233,69,96,0.08)'" onmouseout="this.style.background='transparent'">
-      <div>
-        <div style="font-size:13px;font-weight:500;color:var(--text)">尾号 ${c.phone}${dm?'<span style="color:var(--text2);font-size:11px;margin-left:4px">· '+dm+'</span>':''}</div>
-      </div>
-      <span style="color:${balColor};font-weight:600;font-size:12px">¥${bal.toFixed(2)}</span>
-    </div>`;
+    return `<div onclick="selectCard('${c.phone}')" style="padding:12px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:all 0.18s;border-bottom:1px solid rgba(255,255,255,0.03)" onmouseover="this.style.background='rgba(233,69,96,0.08)';this.style.paddingLeft='18px'" onmouseout="this.style.background='transparent';this.style.paddingLeft='14px'">`+
+      `<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">`+
+        `<div style="width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,rgba(233,69,96,0.15),rgba(233,69,96,0.05));display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:16px">🎴</div>`+
+        `<div style="flex:1;min-width:0">`+
+          `<div style="font-size:13px;font-weight:600;color:var(--text);letter-spacing:0.3px">尾号 ${c.phone}</div>`+
+          (dm?`<div style="font-size:11px;color:var(--text2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">DM · ${dm}</div>`:'')+
+        `</div>`+
+      `</div>`+
+      `<div style="text-align:right;flex-shrink:0;margin-left:10px">`+
+        `<div style="font-size:14px;font-weight:700;color:${balColor};letter-spacing:0.3px">¥${bal.toFixed(2)}</div>`+
+        `<div style="font-size:10px;color:var(--text2);margin-top:1px">余额</div>`+
+      `</div>`+
+    `</div>`;
   }).join('');
+  el.innerHTML=html;
 }
 
 function selectCard(phone){
   // Add card to entries with amount=0
   currentCardEntries.push({phone:phone,amount:0});
   document.getElementById('s_cardDropdown').style.display='none';
-  document.getElementById('s_cardSearch').style.display='none';
+  document.getElementById('cardSearchWrapper').style.display='none';
+  document.getElementById('cardSearchBtn').style.display='flex';
   renderCardEntries();
   updateTotalDeduction();
 }
