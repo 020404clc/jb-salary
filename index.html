@@ -1284,28 +1284,27 @@ function refreshAllPanels() {
 // 统一的保存后处理：刷新所有面板 + 触发云端同步 + 提示
 function afterSave(msg) {
   refreshAllPanels();
-  // v185: 保存后立即触发云端上传+下载，确保数据自动同步
+  // v186: 保存后显示同步状态，下载延迟到上传完成后自动触发
   if(sbClient){
     showSyncStatus('⏳ 同步中...', 'syncing');
-    // 立即检查并重试所有脏表
-    _retryDirtySync();
-    // 500ms后拉取云端最新数据
-    setTimeout(()=>{ syncFromSupabase(false); }, 500);
+    // 3秒后拉取云端最新数据（等上传完成+Realtime传播）
+    setTimeout(()=>{ syncFromSupabase(false); }, 3000);
   }
   if (msg) toast(msg);
 }
 
-// v185: 重试所有脏表同步
+// v186: 重试所有脏表同步（仅在轮询中调用，带锁保护）
 async function _retryDirtySync(){
   if(!sbClient || sbDirtyTables.size === 0) return;
+  if(_uploadLock) return; // 有上传在进行，不重复触发
   const dirtyKeys = [...sbDirtyTables];
-  console.log('[v185] 重试脏表同步:', dirtyKeys);
+  console.log('[v186] 重试脏表同步:', dirtyKeys);
   for(const key of dirtyKeys){
     const data = DB._g(key);
     try {
       await _sbSyncToSupabase(key, data);
     } catch(e){
-      console.warn('[v185] 重试同步', key, '失败:', e);
+      console.warn('[v186] 重试同步', key, '失败:', e);
     }
   }
 }
@@ -1321,6 +1320,8 @@ let sbSyncInProgress = false;
 let sbSyncStartTime = 0; // v171: 记录同步开始时间，用于卡死检测
 let sbSyncQueue = [];
 let sbSelfTriggering = false; // 防止自己推送触发拉取的反馈循环
+let _uploadLock = false; // v186: 上传互斥锁，防止并发上传
+let _lastUploadTime = {}; // v186: 每张表最后一次成功上传的时间戳
 let sbDirtyTables = new Set();
 let sbDirtyTimestamps = {}; // v166: 记录每个脏标记设置时间，用于安全超时
 
@@ -1869,6 +1870,9 @@ async function syncFromSupabase(showToast){
         if(sbDirtyTables.has('sessions')){
           console.log('[Supabase] 跳过脏表 sessions');
           // 不覆盖本地数据
+        } else if(_lastUploadTime['sessions'] && Date.now() - _lastUploadTime['sessions'] < 15000){
+          console.log('[v186] 跳过 sessions 下载（15秒内刚上传过，防止覆盖）');
+          // 刚上传过，本地数据比云端更新，不覆盖
         } else {
         // 合并策略：云端数据优先 + 保留本地未被覆盖的记录
         // 不再过滤映射失败的 session（避免 empIdReverseMap 为空时全部丢失）
@@ -1960,6 +1964,9 @@ async function syncFromSupabase(showToast){
         if(sbDirtyTables.has('schedules')){
           console.log('[Supabase] 跳过脏表 schedules');
           // 不覆盖本地数据
+        } else if(_lastUploadTime['schedules'] && Date.now() - _lastUploadTime['schedules'] < 15000){
+          console.log('[v186] 跳过 schedules 下载（15秒内刚上传过，防止覆盖）');
+          // 刚上传过，本地数据比云端更新，不覆盖
         } else {
         // 合并策略：云端数据优先 + 保留本地未被覆盖的记录（不过滤映射失败的记录）
         const cloudSchIds = new Set(_schDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
@@ -1983,6 +1990,11 @@ async function syncFromSupabase(showToast){
       // 跳过脏表（本地刚保存，上传可能还没完成，不能覆盖）
       if(sbDirtyTables.has(localKey)){
         console.log('[Supabase] 跳过脏表:', localKey, '(本地有未确认的修改)');
+        continue;
+      }
+      // v186: 跳过刚上传过的表（15秒内），防止云端延迟导致覆盖本地
+      if(_lastUploadTime[localKey] && Date.now() - _lastUploadTime[localKey] < 15000){
+        console.log('[v186] 跳过刚上传的表:', localKey, '(15秒内刚上传)');
         continue;
       }
       try {
@@ -2250,6 +2262,12 @@ async function _sbSyncToSupabase(localKey, data){
     sbSyncQueue.push({ table: localKey, data });
     return;
   }
+  // v186: 上传互斥锁，防止并发上传导致数据丢失
+  if(_uploadLock){
+    sbSyncQueue.push({ table: localKey, data });
+    return;
+  }
+  _uploadLock = true;
   sbSelfTriggering = true; // 标记自触发，防止实时订阅拉取形成反馈循环
   showSyncStatus('⏳ 正在上传 ' + localKey + '...', 'syncing');
 
@@ -2395,6 +2413,7 @@ async function _sbSyncToSupabase(localKey, data){
     // v176: 同步成功后才清除脏标记（之前是提前清除，导致上传失败时数据丢失）
     sbDirtyTables.delete(localKey);
     delete sbDirtyTimestamps[localKey];
+    _lastUploadTime[localKey] = Date.now(); // v186: 记录上传成功时间
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
     showSyncStatus('已同步 '+tableName+' '+data.length+'条', 'synced');
@@ -2405,12 +2424,14 @@ async function _sbSyncToSupabase(localKey, data){
     sbDirtyTables.add(localKey);
     sbDirtyTimestamps[localKey] = Date.now();
   } finally {
+    // v186: 释放上传锁
+    _uploadLock = false;
     // v164: 延迟清除自触发标记，清除后立即触发一次拉取，确保跨设备数据传播
     setTimeout(()=>{
       sbSelfTriggering = false;
-      // 自触发窗口关闭后，延迟500ms再拉一次，让云端数据有时间传播
-      setTimeout(()=>{ syncFromSupabase(false); }, 500);
-    }, 1500);
+      // 自触发窗口关闭后，延迟1500ms再拉一次，让云端数据有时间传播
+      setTimeout(()=>{ syncFromSupabase(false); }, 1500);
+    }, 2000);
   }
 }
 
