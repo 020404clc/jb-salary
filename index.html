@@ -1483,8 +1483,10 @@ function _sbLocalToCloud(localKey, localRow){
       // chargeEntries 不需要存到云端
       if(k === 'chargeEntries') continue;
       if(localKey === 'sessions' && k === 'costumeId') continue; // costumeId encoded in notes
-      // status / sessionId for schedules: 存为 notes 的一部分或者跳过
-      if(localKey === 'schedules' && (k === 'status' || k === 'sessionId')) continue;
+      // status / sessionId / roleStatus for schedules: 存为 notes 的一部分或者跳过
+      if(localKey === 'schedules' && (k === 'status' || k === 'sessionId' || k === 'roleStatus')) continue;
+      // scripts 表的 roles 数组编码到 name 中
+      if(localKey === 'scripts' && k === 'roles') continue;
       cloud[k] = v;
     }
   }
@@ -1965,14 +1967,17 @@ async function syncFromSupabase(showToast){
           local.playerCount = sr.player_count;
           local.sessionType = sr.session_type || '';
           local.dms = schDmMap[sr.id] || [];
-          // 从 notes 中恢复 status 和 sessionId
+          // 从 notes 中恢复 status、sessionId 和 roleStatus
           local.status = 'planned';
           local.sessionId = null;
+          local.roleStatus = [];
           if(sr.notes){
             const statusMatch = sr.notes.match(/\[status:([^\]]+)\]/);
             if(statusMatch) local.status = statusMatch[1];
             const sessMatch = sr.notes.match(/\[sessionId:([^\]]+)\]/);
             if(sessMatch) local.sessionId = parseInt(sessMatch[1]) || sessMatch[1];
+            const rsMatch = sr.notes.match(/\[roleStatus:([^\]]+)\]/);
+            if(rsMatch) local.roleStatus = rsMatch[1].split(',').map(Number).filter(n=>!isNaN(n));
           }
           delete local.script_id; delete local.time;
           delete local.player_count; delete local.session_type;
@@ -1997,7 +2002,7 @@ async function syncFromSupabase(showToast){
           return !cloudSchIds.has(s.id);
         });
         const mergedSch = _schDeduped.concat(schLocalOnly);
-        localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').trim()}))));
+        localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').replace(/\s*\[roleStatus:[^\]]*\]/g, '').trim()}))));
         }
         successCount++;
       } else {
@@ -2210,6 +2215,20 @@ async function syncFromSupabase(showToast){
             successCount++;
             continue;
           }
+          // v189: scripts — 从 name 中解析 roles 并清理
+          if(localKey === 'scripts'){
+            localData.forEach(r => {
+              if(r.name){
+                const rolesMatch = r.name.match(/\[ROLES:([^\]]*)\]/);
+                if(rolesMatch){
+                  try { r.roles = JSON.parse(decodeURIComponent(rolesMatch[1])); } catch(e){ r.roles = []; }
+                  r.name = r.name.replace(/\s*\[ROLES:[^\]]*\]/g, '').trim();
+                } else {
+                  if(!r.roles) r.roles = [];
+                }
+              }
+            });
+          }
           // 去重：scripts按name去重
           if(localKey === 'scripts'){
             const seen = new Set();
@@ -2414,6 +2433,11 @@ async function _sbSyncToSupabase(localKey, data){
         // v180: td_adjustments — target/delta 已有实际列，直接使用列值，不再编码到 note
         if(localKey === 'td_adjustments'){
           // target 和 delta 作为实际列存在，无需编码到 note
+        }
+        // v189: scripts — roles 数组编码到 name 字段（URL编码避免括号冲突）
+        if(localKey === 'scripts'){
+          cloudRow.name = (cloudRow.name || '').replace(/\s*\[ROLES:[^\]]*\]/g, '');
+          if(row.roles && row.roles.length > 0) cloudRow.name += ' [ROLES:'+encodeURIComponent(JSON.stringify(row.roles))+']';
         }
         if(localKey === 'recharges' && cloudRow.dm_id !== undefined && cloudRow.dm_id !== null){
           cloudRow.dm_id = empIdMap[cloudRow.dm_id] || null;
@@ -2691,7 +2715,7 @@ async function _sbSyncSchedules(data){
       room: sch.room || '',
       session_type: sch.sessionType || '',
       player_count: sch.playerCount || 0,
-      notes: (sch.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '') + (sch.status ? ' [status:'+sch.status+']' : '') + (sch.sessionId ? ' [sessionId:'+sch.sessionId+']' : '')
+      notes: (sch.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').replace(/\s*\[roleStatus:[^\]]*\]/g, '') + (sch.status ? ' [status:'+sch.status+']' : '') + (sch.sessionId ? ' [sessionId:'+sch.sessionId+']' : '') + (sch.roleStatus && sch.roleStatus.length > 0 ? ' [roleStatus:'+sch.roleStatus.join(',')+']' : '')
     };
     let cloudSchId = null;
     const existingS = schByLocalId[sch.id];
@@ -7422,6 +7446,12 @@ async function _forcePullAllTables(){
         if(r.standard_hours != null) local.standardHours = r.standard_hours;
         if(r.duration_from != null) local.durationFrom = r.duration_from;
         if(r.duration_to != null) local.durationTo = r.duration_to;
+        // v189: 从 name 中解析 roles
+        if(local.name){
+          const rm = local.name.match(/\[ROLES:([^\]]*)\]/);
+          if(rm){ try { local.roles = JSON.parse(decodeURIComponent(rm[1])); } catch(e){ local.roles = []; } local.name = local.name.replace(/\s*\[ROLES:[^\]]*\]/g,'').trim(); }
+          else { local.roles = []; }
+        }
         return local;
       }).filter(s => s.name);
       // 按name去重
@@ -7544,7 +7574,12 @@ async function _forcePullAllTables(){
         }
         schDmMap[sdm.schedule_id].push({dmId: dmId, notes: (sdm.notes||'').replace(/\[DM:[^\]]+\]/,'').trim()});
       });
-      const schedules = schRows.map(sr => ({
+      const schedules = schRows.map(sr => {
+        let _rs = [];
+        if(sr.notes){ const _rsm = sr.notes.match(/\[roleStatus:([^\]]+)\]/); if(_rsm) _rs = _rsm[1].split(',').map(Number).filter(n=>!isNaN(n)); }
+        let _st = 'planned', _si = null;
+        if(sr.notes){ const _stm = sr.notes.match(/\[status:([^\]]+)\]/); if(_stm) _st = _stm[1]; const _sim = sr.notes.match(/\[sessionId:([^\]]+)\]/); if(_sim) _si = parseInt(_sim[1]) || _sim[1]; }
+        return {
         id: sr.local_id != null ? sr.local_id : undefined,
         scriptId: sr.script_id,
         date: sr.date,
@@ -7552,10 +7587,11 @@ async function _forcePullAllTables(){
         playerCount: sr.player_count,
         sessionType: sr.session_type || '',
         dms: schDmMap[sr.id] || [],
-        status: 'planned',
-        sessionId: null,
-        notes: (sr.notes||'').replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').trim()
-      }));
+        status: _st,
+        sessionId: _si,
+        roleStatus: _rs,
+        notes: (sr.notes||'').replace(/\s*\[status:[^\]]*\]/g,'').replace(/\s*\[sessionId:[^\]]*\]/g,'').replace(/\s*\[roleStatus:[^\]]*\]/g,'').trim()
+      };});
       localStorage.setItem('jb2_schedules', JSON.stringify(schedules));
       console.log('[v169] 强制拉取 schedules:', schedules.length, '条');
     }
