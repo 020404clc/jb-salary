@@ -2377,11 +2377,8 @@ async function _sbSyncToSupabase(localKey, data){
     });
 
     const localIds = new Set((data || []).map(d => d.id));
-    // 删除云端有但本地已删除的记录
+    // v190: 删除云端有但本地已删除的记录（延迟到 upsert 成功后执行，避免上传失败时本地数据被误删）
     const toDeleteIds = existingRows ? existingRows.filter(r => r.local_id !== null && !localIds.has(r.local_id)).map(r => r.id) : [];
-    if(toDeleteIds.length > 0){
-      await sbClient.from(tableName).delete().in('id', toDeleteIds);
-    }
 
     // upsert 每条记录
     if(data && data.length > 0){
@@ -2455,6 +2452,10 @@ async function _sbSyncToSupabase(localKey, data){
           if(error) console.warn('[Supabase] 插入', tableName, 'local_id='+row.id, '失败:', error);
         }
       }
+    }
+    // v190: upsert 成功后才删除本地已不存在的云端记录
+    if(toDeleteIds.length > 0){
+      await sbClient.from(tableName).delete().in('id', toDeleteIds);
     }
     // v176: 同步成功后才清除脏标记（之前是提前清除，导致上传失败时数据丢失）
     sbDirtyTables.delete(localKey);
