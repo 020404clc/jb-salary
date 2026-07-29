@@ -7030,14 +7030,19 @@ function renderEmpScheduleView(){
       const dmNote=dmEntry&&dmEntry.notes?dmEntry.notes:'';
       const sessionLabel=sch.sessionType==='afternoon'?'<span>\u2600\ufe0f 午场</span>':sch.sessionType==='evening'?'<span>\ud83c\udf19 晚场</span>':'';
       const roomHtml=sch.room?'<span>\ud83d\udeaa '+sch.room+'</span>':'';
-      // v188: 员工端角色拼场状态
+      // v189: 员工端角色拼场状态（只读展示）
       const allRoles=(sc&&sc.roles)||[];
       const rolled=sch.roleStatus||[];
       let empRoleHtml='';
       if(allRoles.length){
         const full=rolled.length>=allRoles.length;
         empRoleHtml='<div class="role-status-bar"><span>🎭 拼场</span><span class="'+(full?'role-full':'role-missing')+'">'+rolled.length+'/'+allRoles.length+(full?' ✓ 已齐':' 未齐')+'</span></div>';
+        empRoleHtml+='<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">'+allRoles.map((r,i)=>{
+          const isRolled=rolled.includes(i);
+          return'<span style="padding:3px 8px;border-radius:10px;font-size:11px;border:1px solid '+(isRolled?'var(--success)':'var(--border)')+';background:'+(isRolled?'rgba(0,200,83,0.12)':'var(--bg2)')+';color:'+(isRolled?'var(--success)':'var(--text2)')+'">'+(isRolled?'✓ ':'')+r+'</span>';
+        }).join('')+'</div>';
       }
+
       html+=`<div class="session-card ${isCompleted?'executed':'scheduled'}">
         <div class="sch-card-header" onclick="toggleSchCard('e${sch.id}')">
           <div><span class="session-name">${sc?sc.name:'?'}</span> ${statusLabel} <span class="sch-expand-icon" id="sch-icon-e${sch.id}">&#9654;</span></div>
