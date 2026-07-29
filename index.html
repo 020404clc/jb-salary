@@ -600,6 +600,16 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
   width:100%;padding:14px;font-size:16px;font-weight:600;margin-top:16px;
   min-height:48px;
 }
+/* v188: 角色标签样式 */
+.role-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:12px;font-size:12px;background:var(--bg2);color:var(--text2);border:1px solid var(--border);cursor:default;}
+.role-tag .role-del{cursor:pointer;color:var(--danger);font-size:14px;line-height:1;margin-left:2px;}
+.sch-role-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+.sch-role-tag{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:14px;font-size:12px;border:1.5px solid var(--border);background:var(--bg2);color:var(--text2);cursor:pointer;transition:all 0.15s;user-select:none;}
+.sch-role-tag.rolled{background:rgba(0,200,83,0.15);border-color:var(--success);color:var(--success);font-weight:600;}
+.sch-role-tag .role-check{font-size:13px;}
+.role-status-bar{display:flex;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;font-size:12px;background:var(--bg2);}
+.role-status-bar .role-full{color:var(--success);font-weight:600;}
+.role-status-bar .role-missing{color:var(--warn);font-weight:600;}
 
 </style>
 </head>
@@ -958,6 +968,14 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
         <input type="number" id="sc_durationTo" style="flex:1" placeholder="最长" step="0.5" min="0">
       </div>
     </div>
+    <div class="form-group">
+      <label>剧本角色 <span style="font-size:11px;color:var(--text2);font-weight:400">（录入后在排班中可勾选是否摇到玩家）</span></label>
+      <div id="scRolesContainer" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;min-height:30px"></div>
+      <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+        <input type="text" id="scNewRole" placeholder="输入角色名" style="flex:1;font-size:14px" onkeydown="if(event.key==='Enter'){event.preventDefault();addScriptRole()}">
+        <button class="btn btn-secondary btn-sm" onclick="addScriptRole()">+ 添加</button>
+      </div>
+    </div>
     <input type="hidden" id="sc_editId" value="">
     <button class="btn btn-primary" onclick="saveScript()">确认保存</button>
   </div>
@@ -995,7 +1013,11 @@ body{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-s
   <div class="modal-sheet">
     <div class="modal-handle"></div>
     <div class="modal-header"><h3 id="schModalTitle">新增排班</h3><button class="modal-close" onclick="closeModal('scheduleModal')">&times;</button></div>
-    <div class="form-group"><label>剧本</label><select id="sch_script"></select></div>
+    <div class="form-group"><label>剧本</label><select id="sch_script" onchange="renderSchRoleGrid()"></select></div>
+    <div id="schRoleSection" style="display:none">
+      <label style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:4px">角色拼场状态 <span style="font-weight:400">（点击标记已摇到玩家）</span></label>
+      <div class="sch-role-grid" id="schRoleGrid"></div>
+    </div>
     <div class="form-row">
       <div class="form-group"><label>场次</label><select id="sch_session_type" onchange="applySessionType()"><option value="">自定义</option><option value="afternoon">午场</option><option value="evening">晚场</option></select></div>
       <div class="form-group"><label>房间</label><select id="sch_room"><option value="">请选择</option><option value="大漠谣">大漠谣</option><option value="云闲庐">云闲庐</option><option value="鎏华殿">鎏华殿</option><option value="青琉园">青琉园</option><option value="黛绒榭">黛绒榭</option></select></div>
@@ -4153,6 +4175,9 @@ function renderScriptList(){
     else if(runCount>10){profLabel='上手 +1%';profColor='var(--info)';}
     else{profLabel='新手';profColor='var(--text2)';}
 
+    // v188: 角色标签显示
+    const scRoles=sc.roles||[];
+    const rolesHtml=scRoles.length?'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px">'+scRoles.map(r=>'<span style="padding:2px 7px;border-radius:10px;font-size:10px;background:var(--bg2);border:1px solid var(--border);color:var(--text2)">'+r+'</span>').join('')+'</div>':'';
     html+=`<div class="session-card script-item" style="cursor:pointer;border-left-color:var(--info)" onclick="openScriptDetailModal(${sc.id})" data-search="${sc.name.toLowerCase()}">
       <div class="session-header">
         <div class="session-name">${sc.name}</div>
@@ -4163,6 +4188,7 @@ function renderScriptList(){
         <span style="color:${profColor};font-weight:600">${profLabel}</span>
         <span style="font-size:10px">最近 ${lastDate}</span>
       </div>
+      ${rolesHtml}
       <div style="display:flex;gap:6px;margin-top:6px">
         <button class="btn btn-info btn-sm" onclick="event.stopPropagation();editScript(${sc.id})" style="font-size:10px;padding:3px 10px">编辑</button>
         <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteScript(${sc.id})" style="font-size:10px;padding:3px 10px">删除</button>
@@ -5209,6 +5235,18 @@ function renderScheduleList(){
     const pcHtml=sch.playerCount?'<span>&#127922; '+sch.playerCount+'人预组</span>':'';
     const roomHtml=sch.room?'<span>\ud83d\udeaa '+sch.room+'</span>':'';
     const sessionLabel=sch.sessionType==='afternoon'?'<span>\u2600\ufe0f 午场</span>':sch.sessionType==='evening'?'<span>\ud83c\udf19 晚场</span>':'';
+    // v188: 角色拼场状态
+    const allRoles=(sc&&sc.roles)||[];
+    const rolled=sch.roleStatus||[];
+    let roleSummaryHtml='',roleDetailHtml='';
+    if(allRoles.length){
+      const full=rolled.length>=allRoles.length;
+      roleSummaryHtml='<div class="role-status-bar"><span>🎭 拼场</span><span class="'+(full?'role-full':'role-missing')+'">'+rolled.length+'/'+allRoles.length+(full?' ✓ 已齐':' 未齐')+'</span></div>';
+      roleDetailHtml='<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">'+allRoles.map((r,i)=>{
+        const isRolled=rolled.includes(i);
+        return'<span style="padding:3px 8px;border-radius:10px;font-size:11px;border:1px solid '+(isRolled?'var(--success)':'var(--border)')+';background:'+(isRolled?'rgba(0,200,83,0.12)':'var(--bg2)')+';color:'+(isRolled?'var(--success)':'var(--text2)')+'">'+(isRolled?'✓ ':'')+r+'</span>';
+      }).join('')+'</div>';
+    }
     
     return`<div class="session-card ${isCompleted?'executed':'scheduled'}">
       <div class="sch-card-header" onclick="toggleSchCard(${sch.id})">
@@ -5216,6 +5254,7 @@ function renderScheduleList(){
         <div class="session-time">${fmtDate(sch.date)} ${sch.expectedTime||''}</div>
       </div>
       <div style="font-size:12px;color:var(--text2);margin-top:3px">${sessionLabel} ${roomHtml}</div>
+      ${roleSummaryHtml}
       <div class="sch-card-detail" id="sch-detail-${sch.id}">
         <div class="session-info">
           <span>&#128100; ${dmNames||'未分配DM'}</span>
@@ -5223,6 +5262,7 @@ function renderScheduleList(){
           ${sch.notes?'<span>&#128221; '+(function(n){return (n||'').replace(/\[status:[^\]]*\]/g,'').replace(/\[sessionId:[^\]]*\]/g,'').trim()})(sch.notes)+'</span>':''}
           ${linkedSession?'<span>&#9989; 已关联场次</span>':''}
         </div>
+        ${roleDetailHtml}
         <div class="sch-card-actions">
           ${!isCompleted?`<button class="btn btn-success btn-sm" onclick="event.stopPropagation();markScheduleCompleted(${sch.id})">标记完成</button>`:''}
           <button class="btn btn-info btn-sm" onclick="event.stopPropagation();editSchedule(${sch.id})">编辑</button>
@@ -5283,6 +5323,7 @@ function openScheduleModal(editId){
   schDMCount=0;
   addSchDMEntry();
   
+  let editRoleStatus=[];
   if(editId){
     const sch=DB.getSchedules().find(s=>s.id===parseInt(editId));
     if(sch){
@@ -5299,9 +5340,47 @@ function openScheduleModal(editId){
       schDMCount=0;
       (sch.dms||[]).forEach(d=>addSchDMEntry(d));
       if(!sch.dms||!sch.dms.length)addSchDMEntry();
+      editRoleStatus=sch.roleStatus||[];
     }
   }
+  // v188: 渲染角色勾选区（编辑模式传入已有状态）
+  renderSchRoleGrid(editRoleStatus);
   openModal('scheduleModal');
+}
+
+// v188: 渲染排班角色勾选网格
+let _schRolledSet=new Set(); // 临时存储当前已勾选的角色索引
+function renderSchRoleGrid(presetRolled){
+  const scriptId=parseInt(document.getElementById('sch_script').value);
+  const sc=DB.getScripts().find(s=>s.id===scriptId);
+  const roles=(sc&&sc.roles)||[];
+  const section=document.getElementById('schRoleSection');
+  const grid=document.getElementById('schRoleGrid');
+  if(!roles.length){
+    section.style.display='none';
+    grid.innerHTML='';
+    _schRolledSet.clear();
+    return;
+  }
+  section.style.display='';
+  _schRolledSet=new Set(presetRolled||[]);
+  grid.innerHTML=roles.map((r,i)=>{
+    const rolled=_schRolledSet.has(i);
+    return`<span class="sch-role-tag${rolled?' rolled':''}" data-idx="${i}" onclick="toggleSchRole(${i})"><span class="role-check">${rolled?'✓':'○'}</span>${r}</span>`;
+  }).join('');
+}
+function toggleSchRole(idx){
+  if(_schRolledSet.has(idx))_schRolledSet.delete(idx);
+  else _schRolledSet.add(idx);
+  // 重新渲染当前剧本的角色网格
+  const scriptId=parseInt(document.getElementById('sch_script').value);
+  const sc=DB.getScripts().find(s=>s.id===scriptId);
+  const roles=(sc&&sc.roles)||[];
+  const grid=document.getElementById('schRoleGrid');
+  grid.innerHTML=roles.map((r,i)=>{
+    const rolled=_schRolledSet.has(i);
+    return`<span class="sch-role-tag${rolled?' rolled':''}" data-idx="${i}" onclick="toggleSchRole(${i})"><span class="role-check">${rolled?'✓':'○'}</span>${r}</span>`;
+  }).join('');
 }
 
 function editSchedule(id){openScheduleModal(id);}
@@ -5335,8 +5414,11 @@ function saveSchedule(){
   if(playerCount<0){toast('玩家人数不能为负数');return;}
   if(!dms.length){toast('请至少添加一个DM');return;}
   
+  // v188: 收集已摇到玩家的角色索引
+  const roleStatus=[..._schRolledSet].sort((a,b)=>a-b);
+  
   const schedules=DB.getSchedules();
-  const data={scriptId,date,expectedTime,notes,playerCount,sessionType,room,dms,status:'planned',sessionId:null};
+  const data={scriptId,date,expectedTime,notes,playerCount,sessionType,room,dms,roleStatus,status:'planned',sessionId:null};
   
   if(editId){
     const idx=schedules.findIndex(s=>s.id===parseInt(editId));
@@ -5868,6 +5950,9 @@ function openScriptModal(editId){
   document.getElementById('sc_hours').value='5';
   document.getElementById('sc_durationFrom').value='';
   document.getElementById('sc_durationTo').value='';
+  document.getElementById('scNewRole').value='';
+  document.getElementById('scRolesContainer').innerHTML='';
+  let currentRoles=[];
   if(editId){
     const sc=DB.getScripts().find(x=>x.id===editId);
     if(sc){
@@ -5876,11 +5961,40 @@ function openScriptModal(editId){
       document.getElementById('sc_hours').value=sc.standardHours;
       document.getElementById('sc_durationFrom').value=sc.durationFrom||'';
       document.getElementById('sc_durationTo').value=sc.durationTo||'';
+      currentRoles=sc.roles||[];
     }
   }
+  renderScriptRoles(currentRoles);
   openModal('scriptModal');
 }
 function editScript(id){openScriptModal(id);}
+
+// v188: 剧本角色录入
+function renderScriptRoles(roles){
+  const container=document.getElementById('scRolesContainer');
+  if(!container)return;
+  container.innerHTML=(roles||[]).map((r,i)=>`<span class="role-tag">${r}<span class="role-del" onclick="removeScriptRole(${i})">×</span></span>`).join('');
+}
+function addScriptRole(){
+  const input=document.getElementById('scNewRole');
+  const name=sanitizeText(input.value.trim());
+  if(!name){return;}
+  const container=document.getElementById('scRolesContainer');
+  const existing=[...container.querySelectorAll('.role-tag')].map(el=>el.firstChild.textContent);
+  if(existing.includes(name)){toast('角色已存在');return;}
+  const idx=existing.length;
+  const span=document.createElement('span');
+  span.className='role-tag';
+  span.innerHTML=name+'<span class="role-del" onclick="removeScriptRole('+idx+')">×</span>';
+  container.appendChild(span);
+  input.value='';
+  input.focus();
+}
+function removeScriptRole(idx){
+  const container=document.getElementById('scRolesContainer');
+  const tags=container.querySelectorAll('.role-tag');
+  if(tags[idx])tags[idx].remove();
+}
 
 function saveScript(){
   if(!requireAdmin())return;
@@ -5890,10 +6004,12 @@ function saveScript(){
   const durationFrom=parseFloat(document.getElementById('sc_durationFrom').value)||0;
   const durationTo=parseFloat(document.getElementById('sc_durationTo').value)||0;
   const editId=document.getElementById('sc_editId').value;
+  // v188: 收集角色列表
+  const roles=[...document.querySelectorAll('#scRolesContainer .role-tag')].map(el=>el.firstChild.textContent);
   if(!name){toast('请填写剧本名称');return;}
   const scripts=DB.getScripts();
-  if(editId){const idx=scripts.findIndex(s=>s.id===parseInt(editId));if(idx>=0){scripts[idx].name=name;scripts[idx].standardHours=standardHours;scripts[idx].durationFrom=durationFrom;scripts[idx].durationTo=durationTo;}}
-  else{scripts.push({id:nextId(scripts),name,standardHours,durationFrom,durationTo});}
+  if(editId){const idx=scripts.findIndex(s=>s.id===parseInt(editId));if(idx>=0){scripts[idx].name=name;scripts[idx].standardHours=standardHours;scripts[idx].durationFrom=durationFrom;scripts[idx].durationTo=durationTo;scripts[idx].roles=roles;}}
+  else{scripts.push({id:nextId(scripts),name,standardHours,durationFrom,durationTo,roles});}
   DB.saveScripts(scripts);
   closeModal('scriptModal');
   afterSave('剧本已保存');
@@ -6890,12 +7006,21 @@ function renderEmpScheduleView(){
       const dmNote=dmEntry&&dmEntry.notes?dmEntry.notes:'';
       const sessionLabel=sch.sessionType==='afternoon'?'<span>\u2600\ufe0f 午场</span>':sch.sessionType==='evening'?'<span>\ud83c\udf19 晚场</span>':'';
       const roomHtml=sch.room?'<span>\ud83d\udeaa '+sch.room+'</span>':'';
+      // v188: 员工端角色拼场状态
+      const allRoles=(sc&&sc.roles)||[];
+      const rolled=sch.roleStatus||[];
+      let empRoleHtml='';
+      if(allRoles.length){
+        const full=rolled.length>=allRoles.length;
+        empRoleHtml='<div class="role-status-bar"><span>🎭 拼场</span><span class="'+(full?'role-full':'role-missing')+'">'+rolled.length+'/'+allRoles.length+(full?' ✓ 已齐':' 未齐')+'</span></div>';
+      }
       html+=`<div class="session-card ${isCompleted?'executed':'scheduled'}">
         <div class="sch-card-header" onclick="toggleSchCard('e${sch.id}')">
           <div><span class="session-name">${sc?sc.name:'?'}</span> ${statusLabel} <span class="sch-expand-icon" id="sch-icon-e${sch.id}">&#9654;</span></div>
           <div class="session-time">${sch.expectedTime||''}</div>
         </div>
         <div style="font-size:12px;color:var(--text2);margin-top:3px">${sessionLabel} ${roomHtml}</div>
+        ${empRoleHtml}
         <div style="font-size:11px;color:var(--text2);margin-top:2px">&#128100; ${dmNames||'未分配DM'}</div>
         <div class="sch-card-detail" id="sch-detail-e${sch.id}">
           <div class="session-info">
