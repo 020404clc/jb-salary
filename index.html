@@ -6239,12 +6239,8 @@ async function clearAllData(){
     // v164: 写入重置标记，员工终端检测后会强制清空本地数据（含账号）
     try{
       const now = new Date().toISOString();
-      // 尝试 update，失败则 insert
-      const { error: upErr } = await sbClient.from('settings').update({ value: now }).eq('key', 'reset_flag');
-      if(upErr && upErr.code === '42P01'){ /* settings表不存在则跳过 */ }
-      else if(upErr && upErr.details && upErr.details.includes('0 rows')){
-        await sbClient.from('settings').insert({ key: 'reset_flag', value: now }).catch(()=>{});
-      }
+      // v198: 使用 upsert 替代 update+insert，确保 reset_flag 一定能写入
+      await sbClient.from('settings').upsert({ key: 'reset_flag', value: now }, { onConflict: 'key' });
       // 同时清除本地的reset_flag，避免自身也被清空
       localStorage.removeItem('jb2_reset_flag');
       console.log('[Supabase] 已写入重置标记:', now);
