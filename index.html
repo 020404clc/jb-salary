@@ -1662,6 +1662,48 @@ function showSyncStatus(msg, type){
   setTimeout(()=>{ el.className = 'sync-status ' + type; }, duration);
 }
 
+// v200: 离线操作队列
+const _offlineQueue = {
+  _key: 'jb2_offline_queue',
+  get() { try { return JSON.parse(localStorage.getItem(this._key) || '[]'); } catch(e) { return []; } },
+  push(op) { 
+    const q = this.get(); 
+    q.push({...op, timestamp: Date.now()}); 
+    localStorage.setItem(this._key, JSON.stringify(q));
+    console.log('[v200] 离线队列: 已添加操作', op.table, op.method || 'upsert');
+  },
+  clear() { localStorage.removeItem(this._key); },
+  size() { return this.get().length; },
+  async replay() {
+    const q = this.get();
+    if (!q.length) return { success: 0, fail: 0 };
+    showSyncStatus('🔄 正在同步 ' + q.length + ' 条离线操作...', 'syncing');
+    let success = 0, fail = 0;
+    for (const op of q) {
+      try {
+        await _sbSyncToSupabase(op.table, op.data);
+        success++;
+      } catch(e) { 
+        console.warn('[v200] 离线重放失败:', op.table, e);
+        fail++; 
+      }
+    }
+    if (fail === 0) this.clear();
+    if (success > 0) {
+      showSyncStatus('✅ 已同步 ' + success + ' 条' + (fail > 0 ? '，' + fail + ' 条失败' : ''), 'synced');
+    }
+    return { success, fail };
+  }
+};
+// v200: 网络恢复时自动重放离线队列
+window.addEventListener('online', function(){
+  console.log('[v200] 网络恢复，检查离线队列...');
+  if (_offlineQueue.size() > 0) {
+    setTimeout(() => _offlineQueue.replay(), 3000);
+  }
+});
+
+
 function updateCloudBadge(connected){
   sbConnected = connected;
   const badge = document.getElementById('cloudBadge');
@@ -1801,7 +1843,8 @@ async function syncFromSupabase(showToast, force){
           console.log('[Supabase] 员工同步完成：', localEmps.length, '条云端 +', localOnly.length, '条本地独有');
           successCount++;
         } else if(sbDirtyTables.has('employees')){
-          console.log('[Supabase] 跳过脏表 employees');
+          // v200: 脏表也下载合并，不跳过
+          console.log('[v200] 脏表 employees 也执行下载合并');
           successCount++;
         } else {
           console.log('[Supabase] 云端 employees 为空，保留本地数据');
@@ -1922,8 +1965,15 @@ async function syncFromSupabase(showToast, force){
         // 合并策略：如果sessions是脏表，完全保留本地数据
         const existingLocalSess = JSON.parse(localStorage.getItem('jb2_sessions') || '[]');
         if(sbDirtyTables.has('sessions')){
-          console.log('[Supabase] 跳过脏表 sessions');
-          // 不覆盖本地数据
+          // v200: 脏表也下载合并，云端优先
+          console.log('[v200] 脏表 sessions 也执行下载合并');
+          const cloudSessIds2 = new Set(_sessDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
+          const sessLocalOnly2 = existingLocalSess.filter(s => {
+            if(s.id === undefined || s.id === null) return false;
+            return !cloudSessIds2.has(s.id);
+          });
+          const mergedSess2 = _sessDeduped.concat(sessLocalOnly2);
+          localStorage.setItem('jb2_sessions', JSON.stringify(mergedSess2));
         } else if(_lastUploadTime['sessions'] && Date.now() - _lastUploadTime['sessions'] < 3000){
           console.log('[v191] 跳过 sessions 下载（3秒内刚上传过，防止覆盖）');
           // 刚上传过，本地数据比云端更新，不覆盖
@@ -2022,8 +2072,15 @@ async function syncFromSupabase(showToast, force){
         // 合并策略：如果schedules是脏表，完全保留本地数据
         const existingLocalSch = JSON.parse(localStorage.getItem('jb2_schedules') || '[]');
         if(sbDirtyTables.has('schedules')){
-          console.log('[Supabase] 跳过脏表 schedules');
-          // 不覆盖本地数据
+          // v200: 脏表也下载合并，云端优先
+          console.log('[v200] 脏表 schedules 也执行下载合并');
+          const cloudSchIds2 = new Set(_schDeduped.filter(s => s.id !== undefined && s.id !== null).map(s => s.id));
+          const schLocalOnly2 = existingLocalSch.filter(s => {
+            if(s.id === undefined || s.id === null) return false;
+            return !cloudSchIds2.has(s.id);
+          });
+          const mergedSch2 = _schDeduped.concat(schLocalOnly2);
+          localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch2.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').replace(/\s*\[roleStatus:[^\]]*\]/g, '').trim()}))));
         } else if(_lastUploadTime['schedules'] && Date.now() - _lastUploadTime['schedules'] < 3000){
           console.log('[v191] 跳过 schedules 下载（3秒内刚上传过，防止覆盖）');
           // 刚上传过，本地数据比云端更新，不覆盖
@@ -2047,10 +2104,9 @@ async function syncFromSupabase(showToast, force){
     const simpleTables = ['scripts','attendance','td_exchanges','td_consumption','td_adjustments','ratio_overrides','data_overrides','recharges','salary_settlements','salary_change_logs'];
     for(const localKey of simpleTables){
       const tableName = SB_TABLE_MAP[localKey];
-      // 跳过脏表（本地刚保存，上传可能还没完成，不能覆盖）
+      // v200: 脏表也下载合并，不再跳过
       if(sbDirtyTables.has(localKey)){
-        console.log('[Supabase] 跳过脏表:', localKey, '(本地有未确认的修改)');
-        continue;
+        console.log('[v200] 脏表', localKey, '也执行下载合并');
       }
       // v191: 跳过刚上传过的表（3秒内），防止云端延迟导致覆盖本地
       if(_lastUploadTime[localKey] && Date.now() - _lastUploadTime[localKey] < 3000){
@@ -2487,10 +2543,39 @@ async function _sbSyncToSupabase(localKey, data){
     showSyncStatus('已同步 '+tableName+' '+data.length+'条', 'synced');
   } catch(e){
     console.error('[Supabase] 同步', localKey, '异常:', e);
-    showSyncStatus('同步失败: '+localKey, 'error');
-    // 上传失败时重新标记脏表（双重保险：delete已移到成功后，这里主要是catch路径）
-    sbDirtyTables.add(localKey);
-    sbDirtyTimestamps[localKey] = Date.now();
+    // v200: 重试逻辑 — 最多3次指数退避
+    let _retrySuccess = false;
+    for (let _retry = 1; _retry <= 3; _retry++) {
+      const _delay = Math.pow(2, _retry - 1) * 1000; // 1s, 2s, 4s
+      console.log('[v200] 重试上传', localKey, '第', _retry, '次，等待', _delay, 'ms');
+      showSyncStatus('⏳ 同步失败，第' + _retry + '次重试中...', 'syncing');
+      await new Promise(r => setTimeout(r, _delay));
+      try {
+        // 重新执行上传（递归调用但跳过重试 — 通过标记）
+        sbSelfTriggering = true;
+        _uploadLock = true;
+        const _tableName = SB_TABLE_MAP[localKey];
+        if (!_tableName) break;
+        // 简化重试：直接重新调用核心上传
+        await _sbSyncToSupabase_inner(localKey, data, true);
+        _retrySuccess = true;
+        showSyncStatus('✅ 重试成功: ' + localKey, 'synced');
+        break;
+      } catch(retryErr) {
+        console.warn('[v200] 重试', _retry, '失败:', retryErr);
+      }
+    }
+    if (!_retrySuccess) {
+      showSyncStatus('同步失败: '+localKey, 'error');
+      // v200: 上传彻底失败，加入离线队列
+      if (!navigator.onLine || (e.message && (e.message.includes('Failed to fetch') || e.message.includes('NetworkError') || e.message.includes('timeout')))) {
+        _offlineQueue.push({ table: localKey, data: data, method: 'upsert' });
+        console.log('[v200] 已加入离线队列:', localKey);
+      }
+      // 上传失败时重新标记脏表
+      sbDirtyTables.add(localKey);
+      sbDirtyTimestamps[localKey] = Date.now();
+    }
   } finally {
     // v191: 释放上传锁
     _uploadLock = false;
@@ -2628,7 +2713,11 @@ async function _sbSyncSessions(data){
   // v180: 延迟删除到 upsert 成功后执行，避免上传失败时本地数据被误删
   const toDelete = existingSess ? existingSess.filter(s => s.local_id !== null && !localIds.has(s.local_id)) : [];
 
+  // v200: 分批延迟，每50条暂停100ms避免超时
+  let _sessCount = 0;
   for(const sess of (data || [])){
+    _sessCount++;
+    if(_sessCount % 50 === 0) await new Promise(r => setTimeout(r, 100));
     const sessCloud = {
       local_id: sess.id,
       script_id: scriptIdMap[sess.scriptId] || null,
@@ -2734,7 +2823,11 @@ async function _sbSyncSchedules(data){
   // v191: 延迟删除到 upsert 成功后执行，避免上传失败时云端数据被误删
   const toDeleteSch = existingSch ? existingSch.filter(s => s.local_id !== null && !localIds.has(s.local_id)) : [];
 
+  // v200: 分批延迟，每50条暂停100ms避免超时
+  let _schCount = 0;
   for(const sch of (data || [])){
+    _schCount++;
+    if(_schCount % 50 === 0) await new Promise(r => setTimeout(r, 100));
     const schCloud = {
       local_id: sch.id,
       script_id: scriptIdMap[sch.scriptId] || null,
@@ -3099,6 +3192,28 @@ function empById(id){
 }
 function nextId(arr){return arr.length?Math.max(...arr.map(x=>x.id))+1:1;}
 function toast(msg,dur){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),dur||2500);}
+
+// v200: Loading 遮罩
+let _loadingOverlay = null;
+function showLoading(msg){
+  hideLoading();
+  _loadingOverlay = document.createElement('div');
+  _loadingOverlay.className = 'loading-overlay';
+  _loadingOverlay.innerHTML = '<div class="loading-spinner"></div><div class="loading-text">' + (msg||'处理中...') + '</div>';
+  _loadingOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+  var txt = _loadingOverlay.querySelector('.loading-text');
+  if(txt) txt.style.cssText = 'color:#fff;font-size:16px;margin-top:12px;';
+  var spinner = _loadingOverlay.querySelector('.loading-spinner');
+  if(spinner) spinner.style.cssText = 'width:36px;height:36px;border:3px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:jb-spin 0.8s linear infinite;';
+  if(!document.getElementById('jb-spin-style')){
+    var st=document.createElement('style');st.id='jb-spin-style';st.textContent='@keyframes jb-spin{to{transform:rotate(360deg)}}';document.head.appendChild(st);
+  }
+  document.body.appendChild(_loadingOverlay);
+}
+function hideLoading(){
+  if(_loadingOverlay){ _loadingOverlay.remove(); _loadingOverlay=null; }
+}
+
 function roundTo(n,d){const f=Math.pow(10,d);return Math.round(n*f)/f;}
 
 // ========================================
@@ -7594,6 +7709,43 @@ let _visibilityHandler = null;
 })();
 
 // v169: 强制全量拉取——直接覆盖本地，不走脏表逻辑
+
+// v200: 数据校验函数
+function _validatePulledData(){
+  let issues = 0;
+  const warnings = [];
+  // 校验员工
+  const emps = JSON.parse(localStorage.getItem('jb2_employees') || '[]');
+  emps.forEach((e, i) => {
+    if (e.id === undefined || e.id === null) { issues++; warnings.push('员工#' + i + '缺少ID'); }
+    if (!e.name) { issues++; warnings.push('员工#' + i + '缺少姓名'); }
+  });
+  // 校验场次
+  const sessions = JSON.parse(localStorage.getItem('jb2_sessions') || '[]');
+  sessions.forEach((s, i) => {
+    if (s.id === undefined || s.id === null) { issues++; warnings.push('场次#' + i + '缺少ID'); }
+  });
+  // 校验排班
+  const schedules = JSON.parse(localStorage.getItem('jb2_schedules') || '[]');
+  schedules.forEach((s, i) => {
+    if (s.id === undefined || s.id === null) { issues++; warnings.push('排班#' + i + '缺少ID'); }
+  });
+  // 校验剧本
+  const scripts = JSON.parse(localStorage.getItem('jb2_scripts') || '[]');
+  scripts.forEach((s, i) => {
+    if (!s.name) { issues++; warnings.push('剧本#' + i + '缺少名称'); }
+  });
+  if (issues > 0) {
+    console.warn('[v200] 数据校验发现', issues, '条异常:', warnings.slice(0, 10));
+    if (issues <= 5) {
+      showSyncStatus('⚠️ 数据校验: ' + issues + ' 条异常记录', 'synced');
+    }
+  } else {
+    console.log('[v200] ✓ 数据校验通过');
+  }
+  return issues;
+}
+
 async function _forcePullAllTables(){
   if(!sbClient) return false;
   try{
@@ -7863,6 +8015,8 @@ async function _forcePullAllTables(){
     }
     // v171: scripts/employees/sessions/schedules 拉取后也清脏标记
     ['scripts','employees','sessions','schedules'].forEach(k=>{sbDirtyTables.delete(k);delete sbDirtyTimestamps[k];});
+    // v200: 拉取完成后执行数据校验
+    _validatePulledData();
     return true;
   }catch(e){
     console.error('[v169] 强制拉取失败:', e);
@@ -7877,6 +8031,17 @@ async function postLoginInit(){
     initSupabase();
   }
   if(sbClient){
+    // v200: 先上传本地脏数据，再拉取云端最新（确保不丢数据）
+    if (sbDirtyTables.size > 0) {
+      console.log('[v200] 登录后先上传', sbDirtyTables.size, '个脏表...');
+      showSyncStatus('⏳ 正在上传本地数据...', 'syncing');
+      for (const t of [...sbDirtyTables]) {
+        try {
+          const d = JSON.parse(localStorage.getItem('jb2_' + t) || '[]');
+          if (d.length > 0) await _sbSyncToSupabase(t, d);
+        } catch(e) { console.warn('[v200] 上传脏表失败:', t, e); }
+      }
+    }
     // v169: 登录后强制全量拉取（不走脏表逻辑，确保数据一定被拉到）
     await _forcePullAllTables();
     // 再从云端同步业务数据（合并策略）
@@ -8303,6 +8468,7 @@ function openRechargeModal(){
 }
 
 function saveRecharge(){
+  if(!requireAdmin()){return;}
   if(!saveLock('recharge')){toast('请勿重复提交');return;}
   const dmRaw=document.getElementById('rc_dm').value;
   if(dmRaw===''){toast('请选择归属DM');return;}
@@ -8321,6 +8487,7 @@ function saveRecharge(){
 }
 
 function deleteRecharge(id){
+  if(!requireAdmin()){return;}
   let recharges=DB.getRecharges();
   recharges=recharges.filter(r=>r.id!==id);
   DB.saveRecharges(recharges);

@@ -1,5 +1,5 @@
 // Service Worker - 离线缓存 v194-realtime
-const CACHE_NAME='jb-salary-v198-pwd-fix';
+const CACHE_NAME='jb-salary-v200-cloud-fix';
 const urlsToCache = ['./', './index.html'];
 
 self.addEventListener('install', event => {
