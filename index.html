@@ -3868,14 +3868,20 @@ async function unifiedLogin(){
         if(ap) ap.classList.add('active');
         updateRoleIndicator();
         toast('管理员登录中，正在同步云端数据...');
-        // 后台异步同步云端密码（不阻塞）
+        // v198: 登录时双向同步密码——先拉云端，再推本地到云端（确保云端有最新密码）
         try{
           if(sbClient){
-            sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle().then(function(r){
+            sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle().then(async function(r){
               if(r && r.data && r.data.value && r.data.value !== adminPwd){
+                // 云端有更新的密码，本地更新
                 localStorage.setItem('jb2_admin_pwd', r.data.value);
+                console.log('[v198] 云端密码更新，本地已同步');
+              } else if(!r || !r.data || !r.data.value){
+                // 云端没有密码记录，把本地密码推上去
+                console.log('[v198] 云端无密码记录，推送本地密码到云端');
+                await _sbSyncAdminPwd(adminPwd);
               }
-            }).catch(function(){});
+            }).catch(function(e){ console.warn('[v198] 登录密码同步失败:', e); });
           }
         }catch(e){}
         // v168: 先完成同步，再渲染管理面板
