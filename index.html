@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<!-- v201: P0安全底座 - 多标签页同步 + 软删除 + Realtime预留 -->
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -1338,6 +1340,10 @@ async function _retryDirtySync(){
 // ========================================
 // SUPABASE CLOUD SYNC LAYER
 // ========================================
+
+// v201: SW缓存版本号
+const SW_CACHE_VERSION = 'jb-salary-v201-p0-security';
+
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
 let sbClient = null;
@@ -1641,8 +1647,144 @@ function initSupabase(){
     if(typeof window.supabase !== 'undefined' && window.supabase.createClient){
       sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
       console.log('[Supabase] 客户端已初始化');
+      
+      // v201: 初始化多标签页同步管理器
+      if(!authSyncManager && sbClient){
+        authSyncManager = new AuthSyncManager(sbClient);
+        console.log('[v201] AuthSyncManager已初始化');
+      }
+      
       return true;
-    } else {
+    }
+
+// v201: 多标签页登录状态同步
+class AuthSyncManager {
+    constructor(supabaseClient) {
+        this.supabase = supabaseClient;
+        this.storageKey = `sb-${this.getProjectRef()}-auth-token`;
+        this.initStorageListener();
+    }
+    
+    getProjectRef() {
+        const url = this.supabase.supabaseUrl;
+        const match = url.match(/https:\/\/(.+?)\./);
+        return match ? match[1] : '';
+    }
+    
+    initStorageListener() {
+        window.addEventListener('storage', async (e) => {
+            if (e.key !== this.storageKey) return;
+            
+            console.log('[v201] 检测到其他标签页登录状态变化');
+            
+            if (!e.newValue) {
+                // 其他标签页登出 → 当前页也登出
+                console.log('[v201] 其他标签页已登出，当前页同步登出');
+                await this.supabase.auth.signOut({ scope: 'local' });
+                adminLoggedIn = false;
+                currentEmp = null;
+                currentUser = null;
+                showUnifiedLogin();
+                toast('已在其他设备登出');
+            } else if (!e.oldValue) {
+                // 其他标签页登录 → 当前页刷新session
+                console.log('[v201] 其他标签页已登录，当前页同步登录');
+                const { data } = await this.supabase.auth.getSession();
+                if (data.session) {
+                    // 重新初始化用户状态
+                    await postLoginInit();
+                }
+            }
+        });
+    }
+}
+
+let authSyncManager = null;
+
+// v201: Realtime订阅管理器（预留接口，P2阶段启用）
+class RealtimeSyncManager {
+    constructor(supabaseClient) {
+        this.supabase = supabaseClient;
+        this.channels = new Map();
+    }
+    
+    // 订阅指定表的变更
+    subscribeTable(tableName, onInsert, onUpdate, onDelete) {
+        if (this.channels.has(tableName)) {
+            return this.channels.get(tableName);
+        }
+        
+        const channel = this.supabase.channel(`table:${tableName}`, {
+            config: { private: true }
+        });
+        
+        channel
+            .on('postgres_changes', 
+                { 
+                    event: 'INSERT', 
+                    schema: 'public', 
+                    table: tableName,
+                    filter: 'is_deleted=is.false'
+                },
+                (payload) => {
+                    console.log('[v201] Realtime INSERT:', tableName, payload.new);
+                    onInsert?.(payload.new);
+                }
+            )
+            .on('postgres_changes',
+                { 
+                    event: 'UPDATE', 
+                    schema: 'public', 
+                    table: tableName,
+                    filter: 'is_deleted=is.false'
+                },
+                (payload) => {
+                    console.log('[v201] Realtime UPDATE:', tableName, payload.new);
+                    onUpdate?.(payload.new, payload.old);
+                }
+            )
+            .on('postgres_changes',
+                { 
+                    event: 'UPDATE', 
+                    schema: 'public', 
+                    table: tableName,
+                    filter: 'is_deleted=is.true'
+                },
+                (payload) => {
+                    console.log('[v201] Realtime SOFT_DELETE:', tableName, payload.old);
+                    onDelete?.(payload.old);
+                }
+            )
+            .subscribe();
+        
+        this.channels.set(tableName, channel);
+        console.log('[v201] Realtime订阅已启用:', tableName);
+        return channel;
+    }
+    
+    // 取消订阅
+    unsubscribeTable(tableName) {
+        const channel = this.channels.get(tableName);
+        if (channel) {
+            this.supabase.removeChannel(channel);
+            this.channels.delete(tableName);
+            console.log('[v201] Realtime订阅已取消:', tableName);
+        }
+    }
+    
+    // 取消所有订阅
+    unsubscribeAll() {
+        for (const [tableName, channel] of this.channels.entries()) {
+            this.supabase.removeChannel(channel);
+        }
+        this.channels.clear();
+        console.log('[v201] 所有Realtime订阅已取消');
+    }
+}
+
+let realtimeSyncManager = null;
+
+ else {
       console.warn('[Supabase] SDK 未加载');
       return false;
     }
@@ -1712,7 +1854,93 @@ function updateCloudBadge(connected){
     badge.className = 'cloud-badge connected';
     badge.innerHTML = '☁ 云端';
     badge.title = '已连接云端数据库';
-  } else {
+  }
+
+// v201: 软删除API封装
+async function softDeleteRecord(tableName, recordId) {
+    if (!sbClient) {
+        throw new Error('Supabase客户端未初始化');
+    }
+    
+    const { data, error } = await sbClient.rpc('soft_delete', {
+        p_table_name: tableName,
+        p_record_id: recordId
+    });
+    
+    if (error) {
+        console.error('[v201] 软删除失败:', error);
+        throw error;
+    }
+    
+    console.log('[v201] 软删除成功:', tableName, recordId);
+    return data;
+}
+
+// v201: 恢复软删除记录
+async function restoreRecord(tableName, recordId) {
+    if (!sbClient) {
+        throw new Error('Supabase客户端未初始化');
+    }
+    
+    const { data, error } = await sbClient.rpc('restore_record', {
+        p_table_name: tableName,
+        p_record_id: recordId
+    });
+    
+    if (error) {
+        console.error('[v201] 恢复记录失败:', error);
+        throw error;
+    }
+    
+    console.log('[v201] 恢复记录成功:', tableName, recordId);
+    return data;
+}
+
+// v201: 会员卡充值API
+async function cardRecharge(cardId, amount, operatorId, note = null) {
+    if (!sbClient) {
+        throw new Error('Supabase客户端未初始化');
+    }
+    
+    const { data, error } = await sbClient.rpc('card_recharge', {
+        p_card_id: cardId,
+        p_amount: amount,
+        p_operator_id: operatorId,
+        p_note: note
+    });
+    
+    if (error) {
+        console.error('[v201] 充值失败:', error);
+        throw error;
+    }
+    
+    console.log('[v201] 充值成功:', cardId, amount);
+    return data;
+}
+
+// v201: 会员卡消费API
+async function cardConsume(cardId, amount, sessionId, operatorId, note = null) {
+    if (!sbClient) {
+        throw new Error('Supabase客户端未初始化');
+    }
+    
+    const { data, error } = await sbClient.rpc('card_consume', {
+        p_card_id: cardId,
+        p_amount: amount,
+        p_session_id: sessionId,
+        p_operator_id: operatorId,
+        p_note: note
+    });
+    
+    if (error) {
+        console.error('[v201] 消费失败:', error);
+        throw error;
+    }
+    
+    console.log('[v201] 消费成功:', cardId, amount);
+    return data;
+}
+ else {
     badge.className = 'cloud-badge disconnected';
     badge.innerHTML = '☁ 本地';
     badge.title = '未连接云端（仅本地存储）';
@@ -5791,6 +6019,25 @@ function saveSchedule(){
 }
 
 function deleteSchedule(id){
+  if(!canOperate()) return;
+  if(!confirm('确定删除该排班？删除后可在回收站恢复。')) return;
+  
+  // v201: 使用软删除
+  if(sbConnected && sbClient){
+    softDeleteRecord('schedules', id)
+      .then(() => {
+        toast('✅ 排班已删除');
+        renderSchCalendar();
+        renderScheduleList();
+      })
+      .catch(err => {
+        console.error('[v201] 删除排班失败:', err);
+        toast('❌ 删除失败：' + err.message);
+      });
+    return;
+  }
+  
+  // 降级：本地删除
   const idStr=String(id);
   const before=DB.getSchedules().length;
   const updated=DB.getSchedules().filter(s=>String(s.id)!==idStr);
@@ -8154,6 +8401,12 @@ function stopCloudSync(){
 
 
 function adminLogout(){
+  
+  // v201: 清理Realtime订阅
+  if(realtimeSyncManager){
+    realtimeSyncManager.unsubscribeAll();
+  }
+
   adminLoggedIn=false;
   currentUser=null;
   currentEmp=null;
