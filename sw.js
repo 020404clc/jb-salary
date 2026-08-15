@@ -1,5 +1,5 @@
-// Service Worker - 离线缓存 v194-realtime
-const CACHE_NAME='jb-salary-v200-cloud-fix';
+// Service Worker - 离线缓存 v202-soft-delete
+const CACHE_NAME='jb-salary-v202-soft-delete';
 const urlsToCache = ['./', './index.html'];
 
 self.addEventListener('install', event => {
