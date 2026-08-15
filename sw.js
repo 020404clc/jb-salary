@@ -1,5 +1,5 @@
-// Service Worker - 离线缓存 v202-soft-delete
-const CACHE_NAME='jb-salary-v202-soft-delete';
+// Service Worker - 离线缓存 v203
+const CACHE_NAME='jb-salary-v203';
 const urlsToCache = ['./', './index.html'];
 
 self.addEventListener('install', event => {

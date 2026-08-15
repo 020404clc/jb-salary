@@ -1342,7 +1342,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v201-p0-security';
+const SW_CACHE_VERSION = 'jb-salary-v203';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -2884,7 +2884,8 @@ async function _sbSyncEmployees(data){
       hire_month: emp.hireMonth || '',
       assess_percent: emp.assessmentPercent || 0,
       accommodation: emp.accommodationStatus === 'free',
-      accommodation_status: emp.accommodationStatus || 'none'
+      accommodation_status: emp.accommodationStatus || 'none',
+      is_deleted: emp.is_deleted || false
     };
     const existingEmp = empByLocalId[emp.id] || (profileId ? (existingEmpRows || []).find(e => e.profile_id === profileId && (e.local_id === null || e.local_id === undefined)) : null);
     let empError = null;
@@ -2964,7 +2965,8 @@ async function _sbSyncSessions(data){
       notes: (sess.notes || '').replace(/\s*\[costumeId:[^\]]*\]/g, '').replace(/\s*\[deductionEntries:[^\]]*\]/g, '')
         + (sess.costumeId ? ' [costumeId:'+sess.costumeId+']' : '')
         + (sess.deductionEntries && sess.deductionEntries.length ? ' [deductionEntries:'+encodeURIComponent(JSON.stringify(sess.deductionEntries))+']' : ''),
-      created_by: profileIdMap[sess.createdBy] || null
+      created_by: profileIdMap[sess.createdBy] || null,
+      is_deleted: sess.is_deleted || false
     };
     let cloudSessId = null;
     const existingS = sessByLocalId[sess.id];
@@ -3064,7 +3066,8 @@ async function _sbSyncSchedules(data){
       room: sch.room || '',
       session_type: sch.sessionType || '',
       player_count: sch.playerCount || 0,
-      notes: (sch.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').replace(/\s*\[roleStatus:[^\]]*\]/g, '') + (sch.status ? ' [status:'+sch.status+']' : '') + (sch.sessionId ? ' [sessionId:'+sch.sessionId+']' : '') + (sch.roleStatus && sch.roleStatus.length > 0 ? ' [roleStatus:'+sch.roleStatus.join(',')+']' : '')
+      notes: (sch.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').replace(/\s*\[roleStatus:[^\]]*\]/g, '') + (sch.status ? ' [status:'+sch.status+']' : '') + (sch.sessionId ? ' [sessionId:'+sch.sessionId+']' : '') + (sch.roleStatus && sch.roleStatus.length > 0 ? ' [roleStatus:'+sch.roleStatus.join(',')+']' : ''),
+      is_deleted: sch.is_deleted || false
     };
     let cloudSchId = null;
     const existingS = schByLocalId[sch.id];
@@ -6022,27 +6025,27 @@ function deleteSchedule(id){
   if(!canOperate()) return;
   if(!confirm('确定删除该排班？删除后可在回收站恢复。')) return;
   
-  // v201: 使用软删除
+  // v203: 先标记本地数据为软删除（确保UI立即更新）
+  const allSch=DB._g('schedules');
+  const targetSch=allSch.find(s=>String(s.id)===String(id));
+  if(targetSch){
+    targetSch.is_deleted=true;
+    targetSch.deleted_at=new Date().toISOString();
+    DB.saveSchedules(allSch);
+  }
+  
+  // v201: 同步到云端
   if(sbConnected && sbClient){
     softDeleteRecord('schedules', id)
       .then(() => {
-        toast('✅ 排班已删除');
-        renderSchCalendar();
-        renderScheduleList();
+        console.log('[v203] 云端排班软删除成功:', id);
       })
       .catch(err => {
-        console.error('[v201] 删除排班失败:', err);
-        toast('❌ 删除失败：' + err.message);
+        console.error('[v203] 云端删除排班失败:', err);
       });
-    return;
   }
   
-  // 降级：本地删除
-  const idStr=String(id);
-  const before=DB.getSchedules().length;
-  const updated=DB.getSchedules().filter(s=>String(s.id)!==idStr);
-  DB.saveSchedules(updated);
-  afterSave(before>updated.length?'已删除排班':'未找到匹配记录');
+  afterSave('排班已删除');
 }
 
 // Debug: show all schedule data on screen
@@ -6367,7 +6370,8 @@ function deleteSession(id){
     if(!s||!empIdMatch(s.createdBy,currentEmp.id)){toast('只能删除自己录入的场次');return;}
   }
   // v201: 软删除 - 标记 is_deleted=true，保留历史数据
-  const sessions=DB.getSessions();
+  // v203: 修复 - 使用_g获取全部记录（含已删除），避免丢失之前软删除的记录
+  const sessions=DB._g('sessions');
   const session=sessions.find(s=>s.id===id);
   if(session){
     session.is_deleted=true;
@@ -6473,7 +6477,8 @@ function saveEmployee(){
 function deleteEmployee(id){
   if(!requireAdmin())return;
   // v201: 软删除 - 标记 is_deleted=true，保留所有关联薪资历史数据（场次、排班、充值等不变动）
-  const employees=DB.getEmployees();
+  // v203: 修复 - 使用_g获取全部记录（含已删除），避免丢失之前软删除的记录
+  const employees=DB._g('employees');
   const employee=employees.find(e=>empIdMatch(e.id,id));
   if(employee){
     employee.is_deleted=true;
@@ -6560,7 +6565,8 @@ function saveScript(){
 function deleteScript(id){
   if(!requireAdmin())return;
   // v201: 软删除 - 标记 is_deleted=true，保留历史数据
-  const scripts=DB.getScripts();
+  // v203: 修复 - 使用_g获取全部记录（含已删除），避免丢失之前软删除的记录
+  const scripts=DB._g('scripts');
   const script=scripts.find(s=>s.id===id);
   if(script){
     script.is_deleted=true;
@@ -7445,17 +7451,23 @@ function editEmpSession(id){openEmpSessionModal(id);}
 
 function deleteEmpSession(id){
   if(!currentEmp)return;
-  const s=DB.getSessions().find(x=>x.id===id);
+  // v203: 改为软删除，与管理员deleteSession行为一致
+  const allSessions=DB._g('sessions');
+  const s=allSessions.find(x=>x.id===id);
   if(!s||s.createdBy!==currentEmp.id){toast('只能删除自己录入的场次');return;}
-  const schedules=DB.getSchedules();
-  schedules.forEach(sch=>{if(sch.sessionId===id){sch.sessionId=null;sch.status='planned';}});
-  DB.saveSchedules(schedules);
-  DB.saveSessions(DB.getSessions().filter(x=>x.id!==id));
+  s.is_deleted=true;
+  s.deleted_at=new Date().toISOString();
+  DB.saveSessions(allSessions);
+  // 解除排班关联
+  const allSch=DB._g('schedules');
+  let schChanged=false;
+  allSch.forEach(sch=>{if(sch.sessionId===id){sch.sessionId=null;sch.status='planned';schChanged=true;}});
+  if(schChanged) DB.saveSchedules(allSch);
   renderEmpSessions();
   renderEmpPage();
   renderEmpMyData();
   renderEmpScheduleView();
-  toast('场次已删除');
+  afterSave('场次已删除');
 }
 
 // ========================================
