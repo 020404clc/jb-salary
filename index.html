@@ -1208,17 +1208,17 @@ const DB={
       }, 600);
     }
   },
-  getEmployees(){return this._g('employees').map(e=>{if(e.workType)e.workType=normalizeWorkType(e.workType);return e;});},
+  getEmployees(){return this._g('employees').filter(e=>!e.is_deleted).map(e=>{if(e.workType)e.workType=normalizeWorkType(e.workType);return e;});},
   saveEmployees(v){this._s('employees',v.map(e=>{if(e.workType)e.workType=normalizeWorkType(e.workType);return e;}));},
-  getScripts(){const raw=this._g('scripts');const seen=new Set();return raw.filter(s=>{if(seen.has(s.name))return false;seen.add(s.name);return true;});},
+  getScripts(){const raw=this._g('scripts').filter(s=>!s.is_deleted);const seen=new Set();return raw.filter(s=>{if(seen.has(s.name))return false;seen.add(s.name);return true;});},
   saveScripts(v){this._s('scripts',v);},
-  getSessions(){return this._g('sessions');},
+  getSessions(){return this._g('sessions').filter(s=>!s.is_deleted);},
   saveSessions(v){this._s('sessions',v);},
   getAttendance(){return this._g('attendance');},
   saveAttendance(v){this._s('attendance',v);},
   getTDExchanges(){return this._g('td_exchanges');},
   saveTDExchanges(v){this._s('td_exchanges',v);},
-  getSchedules(){const raw=this._g('schedules');const seen=new Set();return raw.filter(s=>{const k=s.date+'_'+s.scriptId+'_'+JSON.stringify(s.dms||[]);if(seen.has(k))return false;seen.add(k);return true;});},
+  getSchedules(){const raw=this._g('schedules').filter(s=>!s.is_deleted);const seen=new Set();return raw.filter(s=>{const k=s.date+'_'+s.scriptId+'_'+JSON.stringify(s.dms||[]);if(seen.has(k))return false;seen.add(k);return true;});},
   saveSchedules(v){this._s('schedules',v);},
   getRatioOverrides(){return this._g('ratio_overrides');},
   saveRatioOverrides(v){this._s('ratio_overrides',v);},
@@ -6366,12 +6366,19 @@ function deleteSession(id){
     const s=DB.getSessions().find(x=>x.id===id);
     if(!s||!empIdMatch(s.createdBy,currentEmp.id)){toast('只能删除自己录入的场次');return;}
   }
-  // Unlink any schedules pointing to this session
-  const schedules=DB.getSchedules();
-  schedules.forEach(sch=>{if(sch.sessionId===id){sch.sessionId=null;sch.status='planned';}});
-  DB.saveSchedules(schedules);
-  DB.saveSessions(DB.getSessions().filter(s=>s.id!==id));
-  afterSave('已删除');
+  // v201: 软删除 - 标记 is_deleted=true，保留历史数据
+  const sessions=DB.getSessions();
+  const session=sessions.find(s=>s.id===id);
+  if(session){
+    session.is_deleted=true;
+    session.deleted_at=new Date().toISOString();
+    DB.saveSessions(sessions);
+    // Unlink any schedules pointing to this session
+    const schedules=DB.getSchedules();
+    schedules.forEach(sch=>{if(sch.sessionId===id){sch.sessionId=null;sch.status='planned';}});
+    DB.saveSchedules(schedules);
+    afterSave('已删除');
+  }
 }
 
 // ========================================
@@ -6465,9 +6472,15 @@ function saveEmployee(){
 
 function deleteEmployee(id){
   if(!requireAdmin())return;
-  // v195: 只删除员工本身，保留所有关联薪资历史数据（场次、排班、充值等不变动）
-  DB.saveEmployees(DB.getEmployees().filter(e=>!empIdMatch(e.id,id)));
-  afterSave('已删除');
+  // v201: 软删除 - 标记 is_deleted=true，保留所有关联薪资历史数据（场次、排班、充值等不变动）
+  const employees=DB.getEmployees();
+  const employee=employees.find(e=>empIdMatch(e.id,id));
+  if(employee){
+    employee.is_deleted=true;
+    employee.deleted_at=new Date().toISOString();
+    DB.saveEmployees(employees);
+    afterSave('已删除');
+  }
 }
 
 // ========================================
@@ -6546,8 +6559,15 @@ function saveScript(){
 
 function deleteScript(id){
   if(!requireAdmin())return;
-  DB.saveScripts(DB.getScripts().filter(s=>s.id!==id));
-  afterSave('已删除');
+  // v201: 软删除 - 标记 is_deleted=true，保留历史数据
+  const scripts=DB.getScripts();
+  const script=scripts.find(s=>s.id===id);
+  if(script){
+    script.is_deleted=true;
+    script.deleted_at=new Date().toISOString();
+    DB.saveScripts(scripts);
+    afterSave('已删除');
+  }
 }
 
 // ========================================
