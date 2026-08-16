@@ -2403,9 +2403,11 @@ async function syncFromSupabase(showToast, force){
           console.log('[Supabase] 拉取', tableName, '成功:', data.length, '条');
           const localData = data.map(row => _sbCloudToLocal(localKey, row));
           // 简单表FK还原：将云端UUID转回本地数字ID
+          // v222: _sbCloudToLocal 已将 employee_id→employeeId(UUID) 并删掉 employee_id，
+          //       所以必须从 r.employeeId(已映射的UUID) 查 empIdReverseMap，不能再读已删除的 r.employee_id
           if(localKey === 'attendance'){
             localData.forEach(r => {
-              r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId;
+              r.employeeId = empIdReverseMap[r.employeeId] || r.employeeId;
               r.makeupRefunded = r.makeup_refunded !== undefined ? r.makeup_refunded : r.makeupRefunded;
               // 从 note 解析 isMakeup 和 attStatus
               if(r.note){
@@ -2421,7 +2423,7 @@ async function syncFromSupabase(showToast, force){
           }
           if(localKey === 'td_exchanges'){
             localData.forEach(r => {
-              r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId;
+              r.employeeId = empIdReverseMap[r.employeeId] || r.employeeId;
               // v173: 从 note 解码 type
               var noteStr = r.note || '';
               var typeMatch = noteStr.match(/\[type:([^\]]+)\]/);
@@ -2435,7 +2437,7 @@ async function syncFromSupabase(showToast, force){
           }
           if(localKey === 'td_consumption'){
             localData.forEach(r => {
-              r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId;
+              r.employeeId = empIdReverseMap[r.employeeId] || r.employeeId;
               r.refunded = r.refunded !== undefined ? r.refunded : false;
               // v173: 从 note 解码 direction 和 cashAmount
               var noteStr = r.note || '';
@@ -2449,7 +2451,7 @@ async function syncFromSupabase(showToast, force){
           }
           if(localKey === 'td_adjustments'){
             localData.forEach(r => {
-              r.employeeId = empIdReverseMap[r.employee_id] || r.employee_id || r.employeeId;
+              r.employeeId = empIdReverseMap[r.employeeId] || r.employeeId;
               // v177: 从 note 恢复 empLocalId（上传时映射失败的备份）
               if((r.employeeId == null || r.employeeId === '') && r.note){
                 var empMatch = r.note.match(/\[empLocalId:(\d+)\]/);
@@ -2469,7 +2471,7 @@ async function syncFromSupabase(showToast, force){
             });
           }
           if(localKey === 'recharges'){
-            localData.forEach(r => { r.dmId = empIdReverseMap[r.dm_id] || r.dm_id || r.dmId; delete r.dm_id; });
+            localData.forEach(r => { r.dmId = empIdReverseMap[r.dmId] || r.dmId; delete r.dm_id; });
           }
           if(localKey === 'ratio_overrides'){
             // ratio_overrides: 云端用 data jsonb 列存储整条本地记录
@@ -3839,9 +3841,9 @@ function getTimeDiffBalance(empId){
   // Apply manual adjustments
   const allAdjs = DB.getTDAdjustments();
   const adjs = allAdjs.filter(a=>empIdMatch(a.employeeId,empId));
-  console.log('[sync-debug] getTimeDiffBalance empId='+empId+', type='+typeof empId+', allAdjs='+allAdjs.length+', adjs='+adjs.length);
-  console.log('[sync-debug] allAdjs details:', JSON.stringify(allAdjs.map(a=>({id:a.id,employeeId:a.employeeId,empType:typeof a.employeeId,target:a.target,delta:a.delta}))));
-  console.log('[sync-debug] adjs details:', JSON.stringify(adjs.map(a=>({id:a.id,employeeId:a.employeeId,target:a.target,delta:a.delta}))));
+  console.log('[v222] getTimeDiffBalance empId='+empId+', type='+typeof empId+', allAdjs='+allAdjs.length+', matchedAdjs='+adjs.length);
+  if(allAdjs.length > 0) console.log('[v222] allAdjs:', JSON.stringify(allAdjs.map(a=>({id:a.id,employeeId:a.employeeId,empType:typeof a.employeeId,target:a.target,delta:a.delta}))));
+  if(adjs.length > 0) console.log('[v222] matchedAdjs:', JSON.stringify(adjs.map(a=>({id:a.id,employeeId:a.employeeId,target:a.target,delta:a.delta}))));
   adjs.forEach(a=>{
     if(a.target==='fixed') fixed += a.delta;
     else if(a.target==='flexible') flexible += a.delta;
