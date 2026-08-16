@@ -1350,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v214';
+const SW_CACHE_VERSION = 'jb-salary-v215';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -6733,8 +6733,29 @@ function setTDDirection(dir){
         document.getElementById('tdc_preview').style.color='var(--info)';
       }
     }else{
-      document.getElementById('tdc_preview').textContent='早退消耗时差 '+hoursVal+' 小时（提前下班）';
-      document.getElementById('tdc_preview').style.color='var(--warn)';
+      // early direction: show game limit if applicable
+      const empIdE=parseInt(document.getElementById('tdc_empId').value);
+      const dateE=document.getElementById('tdc_date').value||todayStr();
+      const gameELimit=getGameEarlyLimit(empIdE,dateE);
+      // Sum existing rest hours for this day
+      const existingC=DB.getTDConsumptions().filter(c=>empIdMatch(c.employeeId,empIdE)&&c.date===dateE&&(c.type==='fixed_rest'||c.type==='flex_rest'));
+      const existingH=existingC.reduce((s,c)=>s+(c.hours||0),0);
+      const hv=parseFloat(hoursVal)||0;
+      const totalH=existingH+hv;
+      if(gameELimit!==null && gameELimit<=0){
+        document.getElementById('tdc_preview').textContent='⚠ 今天有开本，无法提前下班';
+        document.getElementById('tdc_preview').style.color='var(--accent)';
+      }else if(gameELimit!==null && totalH>gameELimit){
+        const allowed=Math.max(0,gameELimit-existingH);
+        document.getElementById('tdc_preview').textContent='⚠ 早退最多'+gameELimit+'h（开本前1h需到店），已用'+existingH.toFixed(1)+'h，本次最多'+allowed.toFixed(1)+'h';
+        document.getElementById('tdc_preview').style.color='var(--accent)';
+      }else if(gameELimit!==null){
+        document.getElementById('tdc_preview').textContent='早退消耗时差 '+hv+'h（开本前1h需到店，最多'+gameELimit+'h）';
+        document.getElementById('tdc_preview').style.color='var(--warn)';
+      }else{
+        document.getElementById('tdc_preview').textContent='早退消耗时差 '+hv+' 小时（提前下班）';
+        document.getElementById('tdc_preview').style.color='var(--warn)';
+      }
     }
   }
 }
@@ -6814,6 +6835,17 @@ function openTDConsumeModal(empId,type){
           document.getElementById('tdc_preview').style.color='var(--accent)';
         }else{
           document.getElementById('tdc_preview').textContent='今天有开本，晚到最多'+gameLateLimit+'h（开本前1h需到店）';
+          document.getElementById('tdc_preview').style.color='var(--warn)';
+        }
+      }else{
+        // early direction: show limit
+        const gameELimit=getGameEarlyLimit(empId,todayStr());
+        if(gameELimit!==null && gameELimit<=0){
+          document.getElementById('tdc_preview').textContent=' 今天有开本，无法提前下班';
+          document.getElementById('tdc_preview').style.color='var(--accent)';
+        }else if(gameELimit!==null){
+          document.getElementById('tdc_hours').max=gameELimit;
+          document.getElementById('tdc_preview').textContent='今天有开本，早退最多'+gameELimit+'h（开本前1h需到店）';
           document.getElementById('tdc_preview').style.color='var(--warn)';
         }
       }
@@ -6902,6 +6934,21 @@ function saveTDConsumption(){
       }
       if(hours>5){
         toast('晚到最多5小时（最晚到18:00）');return;
+      }
+    }
+    // early direction: total rest (existing + new) must not exceed 1h before first game
+    if(direction==='early'){
+      const gameEarlyLimit=getGameEarlyLimit(empId,date);
+      if(gameEarlyLimit!==null && gameEarlyLimit<=0){
+        toast('今天有开本，无法提前下班');return;
+      }
+      // Sum existing rest hours for this day
+      const existingConsumptions=DB.getTDConsumptions().filter(c=>empIdMatch(c.employeeId,empId)&&c.date===date&&(c.type==='fixed_rest'||c.type==='flex_rest'));
+      const existingHours=existingConsumptions.reduce((s,c)=>s+(c.hours||0),0);
+      const totalHours=existingHours+hours;
+      if(gameEarlyLimit!==null && totalHours>gameEarlyLimit){
+        const allowed=Math.max(0,gameEarlyLimit-existingHours);
+        toast('早退最多'+gameEarlyLimit+'h（需开本前1h到店），已用'+existingHours.toFixed(1)+'h，本次最多'+allowed.toFixed(1)+'h');return;
       }
     }
   }
@@ -7075,6 +7122,22 @@ function getGameLateLimit(empId, date) {
   if (totalMin <= 13 * 60) return 0; // can't be late at all
   const maxLateHours = (totalMin - 13 * 60) / 60; // DM starts at 13:00
   return maxLateHours;
+}
+
+// Get max early hours allowed based on game start time (1 hour before first game)
+// Returns null if no restriction, otherwise returns max hours from 13:00 to (gameStart - 1h)
+function getGameEarlyLimit(empId, date) {
+  const schedules = DB.getSchedules().filter(s => s.date === date && s.dms && s.dms.some(d => empIdMatch(d.dmId, empId)));
+  if (!schedules.length) return null; // no game, no restriction
+  let earliest = '23:59';
+  schedules.forEach(s => {
+    const t = s.expectedTime || '23:59';
+    if (t < earliest) earliest = t;
+  });
+  const [h, m] = earliest.split(':').map(Number);
+  const totalMin = h * 60 + m - 60; // 1 hour before first game
+  if (totalMin <= 13 * 60) return 0; // can't leave early at all
+  return (totalMin - 13 * 60) / 60;
 }
 
 // Get max late time for makeup card: 1 hour before first game, or 18:00 if no game
