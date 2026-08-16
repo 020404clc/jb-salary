@@ -1350,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v226';
+const SW_CACHE_VERSION = 'jb-salary-v227';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -3754,28 +3754,30 @@ function calcMidnightFee(session,empId){
   const overtimePerPerson=dm.overtimeFeePerPerson||0;
   const base=overtimePerPerson*(session.playerCount||0);
   if(base<=0){console.log('[calcMidnightFee] 修仙费基数为0, overtimePerPerson='+overtimePerPerson+', players='+(session.playerCount||0));return{fee:0,hours:0,choice:dm.midnightChoice||'midnight'};}
-  // 修仙时长（仅用于展示）
+  // 修仙时长：从00:00开始计算，24:00-1:00=1h，到5:00=5h，到7:00=7h
   let feeHours=0;
-  const feeStart=1440+60; // 次日1:00
+  const feeStart=1440; // 24:00=00:00
   if(actualEndMin>feeStart){
     const feeMin=actualEndMin-feeStart;
-    feeHours=Math.round(feeMin/30)/2;
+    feeHours=Math.round(feeMin/30)/2; // 半小时精度
   }
   // 兼职/半全职：只能修仙，拿80%修仙费
   if(isPartTimeEmp(emp)||isSemiFullTimeEmp(emp)){
-    const fee=roundTo(base*0.8,1);
-    console.log('[calcMidnightFee] 兼职/半全职修仙, base='+base+', fee='+fee+' (80%)');
+    const fee=roundTo(base*feeHours*0.8,1);
+    console.log('[calcMidnightFee] 兼职/半全职修仙, base='+base+', hours='+feeHours+', fee='+fee+' (80%)');
     return{fee:fee,hours:feeHours,choice:'midnight'};
   }
   
   if(dm.midnightChoice==='time_diff'){
-    // 全职选时差：修仙提成=基数×40%，同时累积时差小时数(固定+可调配)
-    console.log('[calcMidnightFee] 时差模式, base='+base+', fee='+roundTo(base*0.4,1)+', hours='+feeHours);
-    return{fee:roundTo(base*0.4,1),hours:feeHours,choice:'time_diff'};
+    // 全职选时差：修仙提成=基数×小时数×40%，同时累积时差小时数(固定+可调配)
+    const fee=roundTo(base*feeHours*0.4,1);
+    console.log('[calcMidnightFee] 时差模式, base='+base+', hours='+feeHours+', fee='+fee);
+    return{fee:fee,hours:feeHours,choice:'time_diff'};
   }else{
-    // 全职选修仙：修仙提成=基数×75%，不累积时差
-    console.log('[calcMidnightFee] 修仙模式, base='+base+', fee='+roundTo(base*0.75,1)+', hours='+feeHours);
-    return{fee:roundTo(base*0.75,1),hours:feeHours,choice:'midnight'};
+    // 全职选修仙：修仙提成=基数×小时数×75%，不累积时差
+    const fee=roundTo(base*feeHours*0.75,1);
+    console.log('[calcMidnightFee] 修仙模式, base='+base+', hours='+feeHours+', fee='+fee);
+    return{fee:fee,hours:feeHours,choice:'midnight'};
   }
 }
 
