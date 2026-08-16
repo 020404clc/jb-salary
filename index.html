@@ -1350,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v216';
+const SW_CACHE_VERSION = 'jb-salary-v217';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -4860,12 +4860,24 @@ function saveRatioOverride(empId,scriptId){
 }
 
 function deleteRatioOverride(empId,scriptId){
-  const overrides=DB.getRatioOverrides().filter(o=>!(empIdMatch(o.employeeId,empId)&&o.scriptId===scriptId));
-  DB.saveRatioOverrides(overrides);
+  // v217: 硬删除本地+云端，调afterSave同步
+  const empIdMap_promise = sbConnected && sbClient ? _sbGetEmployeeIdMap() : Promise.resolve({});
+  const overrides=DB.getRatioOverrides();
+  const toDelete=overrides.filter(o=>empIdMatch(o.employeeId,empId)&&o.scriptId===scriptId);
+  const kept=overrides.filter(o=>!(empIdMatch(o.employeeId,empId)&&o.scriptId===scriptId));
+  DB.saveRatioOverrides(kept);
+  // 立即删云端
+  if(sbConnected && sbClient && toDelete.length){
+    empIdMap_promise.then(empMap=>{
+      const cloudEmpId=empMap[empId]||empId;
+      sbClient.from('ratio_overrides').delete()
+        .eq('employee_id',cloudEmpId)
+        .eq('script_id',scriptId)
+        .then(r=>console.log('[v217] cloud delete ratio_override',empId,scriptId,r));
+    });
+  }
   closeModal('dataOverrideModal');
-  toast('覆盖已清除');
-  renderScriptList();
-  renderAdmin();
+  afterSave('覆盖已清除');
 }
 
 // ---- Data Override Modal (employee level) ----
@@ -4917,12 +4929,23 @@ function saveDataOverride(empId){
 }
 
 function deleteDataOverride(empId){
-  const overrides=DB.getDataOverrides().filter(o=>o.employeeId!==empId);
-  DB.saveDataOverrides(overrides);
+  // v217: 硬删除本地+云端，调afterSave同步
+  const empIdMap_promise = sbConnected && sbClient ? _sbGetEmployeeIdMap() : Promise.resolve({});
+  const overrides=DB.getDataOverrides();
+  const toDelete=overrides.filter(o=>empIdMatch(o.employeeId,empId));
+  const kept=overrides.filter(o=>!empIdMatch(o.employeeId,empId));
+  DB.saveDataOverrides(kept);
+  // 立即删云端
+  if(sbConnected && sbClient && toDelete.length){
+    empIdMap_promise.then(empMap=>{
+      const cloudEmpId=empMap[empId]||empId;
+      sbClient.from('data_overrides').delete()
+        .eq('employee_id',cloudEmpId)
+        .then(r=>console.log('[v217] cloud delete data_override',empId,r));
+    });
+  }
   closeModal('dataOverrideModal');
-  toast('覆盖已清除');
-  renderEmployeeList();
-  renderAdmin();
+  afterSave('覆盖已清除');
 }
 
 // ---- Salary Overview ----
@@ -7254,12 +7277,15 @@ function saveTDExchange(){
 }
 
 function deleteTDAdjustment(adjId){
-  // v204: 改软删除
+  // v217: td_adjustments 云端无is_deleted列，直接硬删除
   const all=DB._g('td_adjustments');
-  const rec=all.find(a=>a.id===adjId);
-  if(!rec){toast('未找到该调整记录');return;}
-  rec.is_deleted=true;rec.deleted_at=new Date().toISOString();
+  const idx=all.findIndex(a=>a.id===adjId);
+  if(idx>=0) all.splice(idx,1);
   DB.saveTDAdjustments(all);
+  // 立即删云端
+  if(sbConnected && sbClient){
+    sbClient.from('td_adjustments').delete().eq('local_id',adjId).then(r=>console.log('[v217] cloud delete adjustment',adjId,r));
+  }
   afterSave('已撤销该调整');
 }
 
@@ -8582,18 +8608,28 @@ async function migrateEmployeesToProfiles(){
 
 function deleteConsumption(id){
   if(!canOperate()){toast('请先登录');return;}
-  // v204: 改软删除，防止多端同步时记录复活
+  // v217: td_consumption 云端无is_deleted列，直接硬删除
   const all=DB._g('td_consumption');
-  const rec=all.find(c=>c.id===id);
-  if(rec){rec.is_deleted=true;rec.deleted_at=new Date().toISOString();DB.saveTDConsumptions(all);}
+  const idx=all.findIndex(c=>c.id===id);
+  if(idx>=0) all.splice(idx,1);
+  DB.saveTDConsumptions(all);
+  // 立即删云端
+  if(sbConnected && sbClient){
+    sbClient.from('td_consumption').delete().eq('local_id',id).then(r=>console.log('[v217] cloud delete consumption',id,r));
+  }
   afterSave('已删除');
 }
 function deleteExchange(id){
   if(!canOperate()){toast('请先登录');return;}
-  // v204: 改软删除
+  // v217: td_exchanges 云端无is_deleted列，直接硬删除
   const all=DB._g('td_exchanges');
-  const rec=all.find(x=>x.id===id);
-  if(rec){rec.is_deleted=true;rec.deleted_at=new Date().toISOString();DB.saveTDExchanges(all);}
+  const idx=all.findIndex(x=>x.id===id);
+  if(idx>=0) all.splice(idx,1);
+  DB.saveTDExchanges(all);
+  // 立即删云端
+  if(sbConnected && sbClient){
+    sbClient.from('td_exchanges').delete().eq('local_id',id).then(r=>console.log('[v217] cloud delete exchange',id,r));
+  }
   afterSave('已删除');
 }
 // 一键清除指定员工的所有时差消耗和兑换记录（控制台用）
@@ -8859,10 +8895,15 @@ function saveRecharge(){
 
 function deleteRecharge(id){
   if(!requireAdmin()){return;}
-  // v204: 改软删除
+  // v217: recharges 云端无is_deleted列，直接硬删除
   const all=DB._g('recharges');
-  const rec=all.find(r=>r.id===id);
-  if(rec){rec.is_deleted=true;rec.deleted_at=new Date().toISOString();DB.saveRecharges(all);}
+  const idx=all.findIndex(r=>r.id===id);
+  if(idx>=0) all.splice(idx,1);
+  DB.saveRecharges(all);
+  // 立即删云端
+  if(sbConnected && sbClient){
+    sbClient.from('recharges').delete().eq('local_id',id).then(r=>console.log('[v217] cloud delete recharge',id,r));
+  }
   afterSave('已删除');
 }
 
