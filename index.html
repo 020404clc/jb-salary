@@ -1312,10 +1312,18 @@ function refreshAllPanels() {
 // 统一的保存后处理：刷新所有面板 + 触发云端同步 + 提示
 function afterSave(msg) {
   refreshAllPanels();
-  // v186: 保存后显示同步状态，下载延迟到上传完成后自动触发
-  if(sbClient){
+  // v210: 先上传脏表到云端，再拉取，防止云端旧数据覆盖本地新数据
+  if(sbClient && sbDirtyTables.size > 0){
     showSyncStatus('⏳ 同步中...', 'syncing');
-    // 3秒后拉取云端最新数据（等上传完成+Realtime传播）
+    (async()=>{
+      const dirtyKeys = [...sbDirtyTables];
+      for(const key of dirtyKeys){
+        try{ await _sbSyncToSupabase(key, DB._g(key)); }catch(e){}
+      }
+      // 上传完成后再拉取（等 Realtime 传播）
+      setTimeout(()=>{ syncFromSupabase(false); }, 2000);
+    })();
+  } else if(sbClient){
     setTimeout(()=>{ syncFromSupabase(false); }, 3000);
   }
   if (msg) toast(msg);
@@ -1342,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v210';
+const SW_CACHE_VERSION = 'jb-salary-v211';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
