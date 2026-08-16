@@ -2060,10 +2060,18 @@ async function syncFromSupabase(showToast, force){
               seenNames.add(p.name);
             });
           }
-          // 合并策略：云端数据优先，保留本地未同步的记录
+          // v206: 合并策略 - 云端数据优先，但本地已标记删除的记录优先保留
+          const localEmpById = {};
+          existingLocalEmps.forEach(e => { if(e.id !== undefined) localEmpById[e.id] = e; });
           const cloudLocalIds = new Set(localEmps.filter(e => e.id !== undefined).map(e => e.id));
           const localOnly = existingLocalEmps.filter(e => e.id !== undefined && !cloudLocalIds.has(e.id));
-          const mergedEmps = localEmps.concat(localOnly);
+          const mergedEmps = localEmps.map(cloudRow => {
+            if(cloudRow.id !== undefined && localEmpById[cloudRow.id]){
+              const localRow = localEmpById[cloudRow.id];
+              if(localRow.is_deleted && !cloudRow.is_deleted) return localRow;
+            }
+            return cloudRow;
+          }).concat(localOnly);
           localStorage.setItem('jb2_employees', JSON.stringify(mergedEmps));
           console.log('[Supabase] 员工同步完成：', localEmps.length, '条云端 +', localOnly.length, '条本地独有');
           successCount++;
@@ -2548,11 +2556,20 @@ async function syncFromSupabase(showToast, force){
             const seen = new Set();
             localData = localData.filter(s => { if(seen.has(s.name)) return false; seen.add(s.name); return true; });
           }
-          // 合并策略：云端数据优先，但保留本地未同步的记录（防止数据丢失）
+          // v206: 合并策略 - 云端数据优先，但本地已标记删除的记录优先保留（防止上传未完成时被覆盖）
           const existingLocal = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
+          const localById = {};
+          existingLocal.forEach(r => { if(r.id !== undefined && r.id !== null) localById[r.id] = r; });
           const cloudLocalIds = new Set(localData.filter(r => r.id !== undefined && r.id !== null).map(r => r.id));
           const localOnly = existingLocal.filter(r => r.id !== undefined && r.id !== null && !cloudLocalIds.has(r.id));
-          const mergedData = localData.concat(localOnly);
+          // 对于云端和本地都有的记录，如果本地已标记删除但云端未删除，保留本地版本
+          const mergedData = localData.map(cloudRow => {
+            if(cloudRow.id !== undefined && cloudRow.id !== null && localById[cloudRow.id]){
+              const localRow = localById[cloudRow.id];
+              if(localRow.is_deleted && !cloudRow.is_deleted) return localRow;
+            }
+            return cloudRow;
+          }).concat(localOnly);
           localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
           successCount++;
         }
