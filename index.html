@@ -5668,7 +5668,9 @@ function renderAttendance(){
           html+='<div style="font-size:11px;color:var(--text2);margin-bottom:4px">变动: <span style="color:'+reasonColor+'">'+dRow.changeReason+'</span></div>';
         }
         if(dRow){
-          html+='<div style="font-size:11px;margin-bottom:6px">状态: <span style="color:'+dRow.statusColor+';font-weight:500">'+dRow.statusLabel+'</span></div>';
+          html+='<div style="font-size:11px;margin-bottom:6px">状态: <span style="color:'+dRow.statusColor+';font-weight:500">'+dRow.statusLabel+'</span>';
+          if(dRow.statusLabel==='补卡成功') html+=' <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();undoMakeupCard('+dm.id+',\''+detailDs+'\')" style="font-size:10px;padding:2px 8px;margin-left:6px">撤销</button>';
+          html+='</div>';
         }else{
           html+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">无排班记录</div>';
         }
@@ -8682,6 +8684,28 @@ function deleteExchange(id){
     sbClient.from('td_exchanges').delete().eq('local_id',id).then(r=>console.log('[v217] cloud delete exchange',id,r));
   }
   afterSave('已删除');
+}
+
+// v220: 撤销补卡 - 移除考勤记录中的补卡标记，硬删除同步云端
+function undoMakeupCard(empId, date){
+  if(!canOperate()){toast('请先登录');return;}
+  const att=DB.getAttendance();
+  const idx=att.findIndex(a=>empIdMatch(a.employeeId,empId)&&a.date===date&&a.isMakeup);
+  if(idx<0){toast('未找到补卡记录');return;}
+  const record=att[idx];
+  // 如果该记录只有补卡信息（没有其他考勤数据），直接删除整条
+  if(!record.status || record.status==='normal'){
+    att.splice(idx,1);
+  } else {
+    // 有其他考勤状态，只移除补卡标记
+    record.isMakeup=false;
+  }
+  DB.saveAttendance(att);
+  // 立即删云端
+  if(sbConnected && sbClient){
+    sbClient.from('attendance').delete().eq('local_id',record.id).then(r=>console.log('[v220] cloud delete makeup',record.id,r));
+  }
+  afterSave('已撤销补卡');
 }
 // 一键清除指定员工的所有时差消耗和兑换记录（控制台用）
 // 用法: clearEmpTDEmpRecords('小明') 或 clearEmpTDEmpRecords(1)
