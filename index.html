@@ -1342,7 +1342,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v208';
+const SW_CACHE_VERSION = 'jb-salary-v209';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -3430,7 +3430,7 @@ async function migrateLocalToSupabase(){
 // ========================================
 function todayStr(){return new Date().toISOString().split('T')[0];}
 function monthStr(){return todayStr().substring(0,7);}
-function fmtDate(d){const p=d.split('-');return p[1]+'月'+p[2]+'日';}
+function fmtDate(d){if(!d)return'?';const p=String(d).split('-');if(p.length<3)return d;return p[1]+'月'+p[2]+'日';}
 function weekDay(d){return['日','一','二','三','四','五','六'][new Date(d).getDay()];}
 function empName(id){
   if(id==null||id===undefined||id==='')return '?';
