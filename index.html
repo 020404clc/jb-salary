@@ -2110,6 +2110,7 @@ async function syncFromSupabase(showToast, force){
     // fallback：如果云端映射为空，从 localStorage 已有员工数据构建补充映射
     // localStorage 员工 id 是本地数字ID，但可能残留之前同步时的 cloudId 字段
     if(Object.keys(empIdReverseMap).length === 0){
+      console.log('[sync-debug] empIdReverseMap为空，尝试fallback构建');
       // fallback 1: 从云端 employees 表重新查询
       const { data: fbEmpRows } = await sbClient.from('employees').select('id,profile_id,local_id');
       if(fbEmpRows){
@@ -2124,6 +2125,28 @@ async function syncFromSupabase(showToast, force){
           fbProfiles.forEach(p => { empIdReverseMap[p.id] = p.name; });
         }
       }
+      // v218 fallback 3: 从 localStorage 本地员工 + 云端 employees 按名字匹配构建
+      if(Object.keys(empIdReverseMap).length === 0){
+        console.log('[sync-debug] fallback 1&2 仍为空，尝试按名字匹配');
+        const localEmps = DB.getEmployees() || [];
+        const { data: cloudEmpRows } = await sbClient.from('employees').select('id,profile_id,local_id');
+        if(cloudEmpRows && cloudEmpRows.length > 0 && localEmps.length > 0){
+          const { data: cloudProfiles } = await sbClient.from('profiles').select('id,name');
+          const cloudProfMap = {};
+          if(cloudProfiles) cloudProfiles.forEach(p => { cloudProfMap[p.id] = p.name; });
+          cloudEmpRows.forEach(ce => {
+            const cloudName = cloudProfMap[ce.profile_id] || '';
+            if(cloudName){
+              const localEmp = localEmps.find(le => le.name === cloudName);
+              if(localEmp && ce.local_id !== null && ce.local_id !== undefined){
+                empIdReverseMap[ce.id] = ce.local_id;
+                console.log('[sync-debug] fallback3 名字匹配: cloudName='+cloudName+', localId='+ce.local_id+', cloudUUID='+ce.id);
+              }
+            }
+          });
+        }
+      }
+      console.log('[sync-debug] fallback后 empIdReverseMap:', JSON.stringify(empIdReverseMap));
     }
     // 注意：sessions 和 schedules 的脏表检查在后面合并时处理
     const scriptIdReverseMap = await _sbGetScriptIdReverseMap();
