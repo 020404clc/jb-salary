@@ -2751,7 +2751,12 @@ async function _sbSyncCore(localKey, data){
     // v204: 计算localIds时包含所有记录（含软删除），确保云端的已删除记录能被清理
     const localIds = new Set((data || []).map(d => d.id));
     // v190: 删除云端有但本地已删除的记录（延迟到 upsert 成功后执行，避免上传失败时本地数据被误删）
-    const toDeleteIds = existingRows ? existingRows.filter(r => r.local_id !== null && !localIds.has(r.local_id)).map(r => r.id) : [];
+    // v219: td_adjustments 使用"本地优先"合并策略，严禁用 toDeleteIds 删除设备本地没有的云端记录（跨设备竞争会丢数据）
+    //       td_adjustments 的删除只走两条路：① v217硬删除(deleteTDAdjustment直接删云端) ② SB_NO_SOFT_DELETE_TABLES中is_deleted过滤
+    const toDeleteIds = (localKey === 'td_adjustments')
+      ? [] // v219: td_adjustments 完全跳过 toDeleteIds，防止跨设备数据抹杀
+      : (existingRows ? existingRows.filter(r => r.local_id !== null && !localIds.has(r.local_id)).map(r => r.id) : []);
+    console.log('[v219] 上传', localKey, ': 本地'+(data||[]).length+'条, 云端已有'+(existingRows||[]).length+'条, toDeleteIds='+toDeleteIds.length);
 
     // v207: 对于没有is_deleted列的表，需额外过滤本地软删除记录（无法存到云端）并加入待删除列表
     var uploadData = data || [];
@@ -2811,6 +2816,10 @@ async function _sbSyncCore(localKey, data){
           cloudRow.note = cloudRow.note.trim();
           delete cloudRow.type; delete cloudRow.amount;
         }
+        // v219: td_adjustments 上传诊断日志
+        if(localKey === 'td_adjustments'){
+          console.log('[v219] 上传td_adjustment: localId='+row.id+', employee_id='+cloudRow.employee_id+', target='+cloudRow.target+', delta='+cloudRow.delta+', note='+cloudRow.note);
+        }
         // v180: td_adjustments — target/delta 已有实际列，直接使用列值
         // v189: scripts — roles 数组编码到 name 字段
         if(localKey === 'scripts'){
@@ -2850,6 +2859,16 @@ async function _sbSyncCore(localKey, data){
 // ---------- 本地→云端：增量同步 ----------
 async function _sbSyncToSupabase(localKey, data){
   if(!sbClient) return;
+  // v219: td_adjustments 安全守卫 — 如果本地为空但上次同步时云端有记录，说明本地数据可能不完整，跳过上传防止抹杀云端
+  if(localKey === 'td_adjustments' && (!data || data.length === 0)){
+    try{
+      const {data:cloudCheck} = await sbClient.from('td_adjustments').select('id').limit(1);
+      if(cloudCheck && cloudCheck.length > 0){
+        console.warn('[v219] td_adjustments 安全守卫: 本地为空但云端有'+cloudCheck.length+'条记录，跳过上传防止数据丢失');
+        return;
+      }
+    }catch(e){}
+  }
   if(sbSyncInProgress){
     sbSyncQueue.push({ table: localKey, data });
     return;
