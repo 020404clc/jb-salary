@@ -1350,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v212';
+const SW_CACHE_VERSION = 'jb-salary-v213';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -2220,8 +2220,8 @@ async function syncFromSupabase(showToast, force){
           });
           const mergedSess2 = _sessDeduped.concat(sessLocalOnly2);
           localStorage.setItem('jb2_sessions', JSON.stringify(mergedSess2));
-        } else if(_lastUploadTime['sessions'] && Date.now() - _lastUploadTime['sessions'] < 3000){
-          console.log('[v191] 跳过 sessions 下载（3秒内刚上传过，防止覆盖）');
+        } else if(_lastUploadTime['sessions'] && Date.now() - _lastUploadTime['sessions'] < 300000){
+          console.log('[v213] 跳过 sessions 下载（300秒内刚上传过，防止覆盖）');
           // 刚上传过，本地数据比云端更新，不覆盖
         } else {
         // 合并策略：云端数据优先 + 保留本地未被覆盖的记录
@@ -2327,8 +2327,8 @@ async function syncFromSupabase(showToast, force){
           });
           const mergedSch2 = _schDeduped.concat(schLocalOnly2);
           localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch2.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').replace(/\s*\[roleStatus:[^\]]*\]/g, '').trim()}))));
-        } else if(_lastUploadTime['schedules'] && Date.now() - _lastUploadTime['schedules'] < 3000){
-          console.log('[v191] 跳过 schedules 下载（3秒内刚上传过，防止覆盖）');
+        } else if(_lastUploadTime['schedules'] && Date.now() - _lastUploadTime['schedules'] < 300000){
+          console.log('[v213] 跳过 schedules 下载（300秒内刚上传过，防止覆盖）');
           // 刚上传过，本地数据比云端更新，不覆盖
         } else {
         // 合并策略：云端数据优先 + 保留本地未被覆盖的记录（不过滤映射失败的记录）
@@ -2354,14 +2354,13 @@ async function syncFromSupabase(showToast, force){
       if(sbDirtyTables.has(localKey)){
         console.log('[v200] 脏表', localKey, '也执行下载合并');
       }
-      // v212: 本地保存后60秒内，跳过拉取，防止云端旧数据覆盖本地新数据
-      // 覆盖了v191的3秒上传保护 + 新增本地保存时间保护
-      if(_lastUploadTime[localKey] && Date.now() - _lastUploadTime[localKey] < 60000){
-        console.log('[v212] 跳过刚上传的表:', localKey, '(60秒内刚上传)');
+      // v213: 本地保存后300秒(5分钟)内，跳过拉取，防止云端旧数据覆盖本地新数据
+      if(_lastUploadTime[localKey] && Date.now() - _lastUploadTime[localKey] < 300000){
+        console.log('[v213] 跳过刚上传的表:', localKey, '(300秒内刚上传)');
         continue;
       }
-      if(sbDirtyTimestamps[localKey] && Date.now() - sbDirtyTimestamps[localKey] < 60000){
-        console.log('[v212] 跳过刚保存的表:', localKey, '(60秒内刚保存，保护本地数据)');
+      if(sbDirtyTimestamps[localKey] && Date.now() - sbDirtyTimestamps[localKey] < 300000){
+        console.log('[v213] 跳过刚保存的表:', localKey, '(300秒内刚保存，保护本地数据)');
         continue;
       }
       try {
@@ -2577,20 +2576,39 @@ async function syncFromSupabase(showToast, force){
             const seen = new Set();
             localData = localData.filter(s => { if(seen.has(s.name)) return false; seen.add(s.name); return true; });
           }
-          // v206: 合并策略 - 云端数据优先，但本地已标记删除的记录优先保留（防止上传未完成时被覆盖）
+          // v213: 合并策略 - 通用表云端优先，但td_adjustments本地优先（用户在本地创建调整，本地数据是真相源）
           const existingLocal = JSON.parse(localStorage.getItem('jb2_' + localKey) || '[]');
           const localById = {};
           existingLocal.forEach(r => { if(r.id !== undefined && r.id !== null) localById[r.id] = r; });
           const cloudLocalIds = new Set(localData.filter(r => r.id !== undefined && r.id !== null).map(r => r.id));
           const localOnly = existingLocal.filter(r => r.id !== undefined && r.id !== null && !cloudLocalIds.has(r.id));
-          // 对于云端和本地都有的记录，如果本地已标记删除但云端未删除，保留本地版本
-          const mergedData = localData.map(cloudRow => {
-            if(cloudRow.id !== undefined && cloudRow.id !== null && localById[cloudRow.id]){
-              const localRow = localById[cloudRow.id];
-              if(localRow.is_deleted && !cloudRow.is_deleted) return localRow;
-            }
-            return cloudRow;
-          }).concat(localOnly);
+          let mergedData;
+          if(localKey === 'td_adjustments'){
+            // v213: td_adjustments 本地优先 —— 本地有值的记录永不被云端覆盖
+            mergedData = localData.map(cloudRow => {
+              if(cloudRow.id !== undefined && cloudRow.id !== null && localById[cloudRow.id]){
+                const localRow = localById[cloudRow.id];
+                // 本地记录有target和delta时，以本地为准
+                if(localRow.target != null && localRow.target !== '' && localRow.delta != null){
+                  console.log('[v213] td_adjustments 本地优先: id='+cloudRow.id+', 本地target='+localRow.target+', delta='+localRow.delta);
+                  return localRow;
+                }
+                // 本地记录标记删除但云端未删除，保留本地版本
+                if(localRow.is_deleted && !cloudRow.is_deleted) return localRow;
+              }
+              return cloudRow;
+            }).concat(localOnly);
+          } else {
+            // v206: 通用合并策略 - 云端数据优先，但本地已标记删除的记录优先保留
+            mergedData = localData.map(cloudRow => {
+              if(cloudRow.id !== undefined && cloudRow.id !== null && localById[cloudRow.id]){
+                const localRow = localById[cloudRow.id];
+                if(localRow.is_deleted && !cloudRow.is_deleted) return localRow;
+              }
+              return cloudRow;
+            }).concat(localOnly);
+          }
+          console.log('[v213] 合并', localKey, ': 云端'+localData.length+'条 + 本地独有'+localOnly.length+'条 = 合并后'+mergedData.length+'条');
           localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
           successCount++;
         }
@@ -3772,10 +3790,12 @@ function getTimeDiffBalance(empId){
   });
   // Apply manual adjustments
   const adjs = DB.getTDAdjustments().filter(a=>empIdMatch(a.employeeId,empId));
+  console.log('[v213] getTimeDiffBalance empId='+empId+', adjs count='+adjs.length+', adjs='+JSON.stringify(adjs.map(a=>({id:a.id,target:a.target,delta:a.delta,employeeId:a.employeeId}))));
   adjs.forEach(a=>{
     if(a.target==='fixed') fixed += a.delta;
     else if(a.target==='flexible') flexible += a.delta;
   });
+  console.log('[v213] getTimeDiffBalance result: fixed='+fixed+', flexible='+flexible);
   return{fixed:Math.max(0,fixed),flexible:Math.max(0,flexible)};
 }
 
