@@ -1342,7 +1342,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v205';
+const SW_CACHE_VERSION = 'jb-salary-v208';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -2389,7 +2389,10 @@ async function syncFromSupabase(showToast, force){
               var noteStr = r.note || '';
               var typeMatch = noteStr.match(/\[type:([^\]]+)\]/);
               if(typeMatch) r.type = typeMatch[1];
-              r.note = noteStr.replace(/\s*\[type:[^\]]*\]/g, '').trim();
+              // v208: 从 note 解码 amount
+              var amountMatch = noteStr.match(/\[amount:([^\]]+)\]/);
+              if(amountMatch) r.amount = parseFloat(amountMatch[1]) || 0;
+              r.note = noteStr.replace(/\s*\[type:[^\]]*\]/g, '').replace(/\s*\[amount:[^\]]*\]/g, '').trim();
               delete r.employee_id;
             });
           }
@@ -2738,13 +2741,15 @@ async function _sbSyncCore(localKey, data){
           cloudRow.note = cloudRow.note.trim();
           delete cloudRow.direction; delete cloudRow.cashAmount;
         }
-        // v173: td_exchanges — 云端缺 type 列，编码到 note
+        // v173: td_exchanges — 云端缺 type/amount 列，编码到 note
         if(localKey === 'td_exchanges'){
           cloudRow.note = (cloudRow.note || '')
-            .replace(/\s*\[type:[^\]]*\]/g, '');
+            .replace(/\s*\[type:[^\]]*\]/g, '')
+            .replace(/\s*\[amount:[^\]]*\]/g, '');
           if(row.type) cloudRow.note += ' [type:'+row.type+']';
+          if(row.amount != null && row.amount !== 0) cloudRow.note += ' [amount:'+row.amount+']';
           cloudRow.note = cloudRow.note.trim();
-          delete cloudRow.type;
+          delete cloudRow.type; delete cloudRow.amount;
         }
         // v180: td_adjustments — target/delta 已有实际列，直接使用列值
         // v189: scripts — roles 数组编码到 name 字段
