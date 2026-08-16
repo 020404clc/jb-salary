@@ -1350,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v225';
+const SW_CACHE_VERSION = 'jb-salary-v226';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -3773,9 +3773,9 @@ function calcMidnightFee(session,empId){
     console.log('[calcMidnightFee] 时差模式, base='+base+', fee='+roundTo(base*0.4,1)+', hours='+feeHours);
     return{fee:roundTo(base*0.4,1),hours:feeHours,choice:'time_diff'};
   }else{
-    // 全职选修仙：修仙提成=基数×100%（不封顶），不累积时差
-    console.log('[calcMidnightFee] 修仙模式, base='+base+', fee='+roundTo(base,1)+', hours='+feeHours);
-    return{fee:roundTo(base,1),hours:feeHours,choice:'midnight'};
+    // 全职选修仙：修仙提成=基数×75%，不累积时差
+    console.log('[calcMidnightFee] 修仙模式, base='+base+', fee='+roundTo(base*0.75,1)+', hours='+feeHours);
+    return{fee:roundTo(base*0.75,1),hours:feeHours,choice:'midnight'};
   }
 }
 
