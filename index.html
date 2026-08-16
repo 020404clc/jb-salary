@@ -1599,6 +1599,8 @@ async function _sbGetEmployeeIdReverseMap(){
     if(error && error.code === '42P01') break; // table not exists, no point retrying
     await new Promise(r => setTimeout(r, 500));
   }
+  console.log('[sync-debug] _sbGetEmployeeIdReverseMap: empRows='+(empRows?empRows.length:'null')+', error='+(empRows?'none':'query failed or empty'));
+  if(empRows) console.log('[sync-debug] empRows:', JSON.stringify(empRows));
   const map = {};
   const uuidNameMap = {};
   if(empRows){
@@ -2609,6 +2611,10 @@ async function syncFromSupabase(showToast, force){
             }).concat(localOnly);
           }
           console.log('[v213] 合并', localKey, ': 云端'+localData.length+'条 + 本地独有'+localOnly.length+'条 = 合并后'+mergedData.length+'条');
+          if(localKey === 'td_adjustments'){
+            console.log('[sync-debug] td_adjustments mergedData:', JSON.stringify(mergedData.map(r=>({id:r.id,employeeId:r.employeeId,empType:typeof r.employeeId,target:r.target,delta:r.delta}))));
+            console.log('[sync-debug] empIdReverseMap:', JSON.stringify(empIdReverseMap));
+          }
           localStorage.setItem('jb2_' + localKey, JSON.stringify(mergedData));
           successCount++;
         }
@@ -3789,13 +3795,16 @@ function getTimeDiffBalance(empId){
     }
   });
   // Apply manual adjustments
-  const adjs = DB.getTDAdjustments().filter(a=>empIdMatch(a.employeeId,empId));
-  console.log('[v213] getTimeDiffBalance empId='+empId+', adjs count='+adjs.length+', adjs='+JSON.stringify(adjs.map(a=>({id:a.id,target:a.target,delta:a.delta,employeeId:a.employeeId}))));
+  const allAdjs = DB.getTDAdjustments();
+  const adjs = allAdjs.filter(a=>empIdMatch(a.employeeId,empId));
+  console.log('[sync-debug] getTimeDiffBalance empId='+empId+', type='+typeof empId+', allAdjs='+allAdjs.length+', adjs='+adjs.length);
+  console.log('[sync-debug] allAdjs details:', JSON.stringify(allAdjs.map(a=>({id:a.id,employeeId:a.employeeId,empType:typeof a.employeeId,target:a.target,delta:a.delta}))));
+  console.log('[sync-debug] adjs details:', JSON.stringify(adjs.map(a=>({id:a.id,employeeId:a.employeeId,target:a.target,delta:a.delta}))));
   adjs.forEach(a=>{
     if(a.target==='fixed') fixed += a.delta;
     else if(a.target==='flexible') flexible += a.delta;
   });
-  console.log('[v213] getTimeDiffBalance result: fixed='+fixed+', flexible='+flexible);
+  console.log('[sync-debug] getTimeDiffBalance result: fixed='+fixed+', flexible='+flexible);
   return{fixed:Math.max(0,fixed),flexible:Math.max(0,flexible)};
 }
 
