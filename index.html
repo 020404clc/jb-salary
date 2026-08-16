@@ -1480,6 +1480,9 @@ const SB_FIELD_MAP = {
   salary_change_logs: { employeeId:'employee_id', employeeName:'employee_name', changeType:'change_type', changedAt:'changed_at', changedBy:'changed_by', beforeData:'before_data', afterData:'after_data' }
 };
 
+// v207: 云端没有is_deleted/deleted_at列的表，上传时需跳过这些字段
+const SB_NO_SOFT_DELETE_TABLES = new Set(['td_adjustments','td_consumptions','td_exchanges','attendance','recharges','data_overrides','ratio_overrides']);
+
 // ---------- 工具函数 ----------
 // camelCase → snake_case
 function _sbCamelToSnake(s){ return s.replace(/[A-Z]/g, c => '_'+c.toLowerCase()); }
@@ -1519,6 +1522,8 @@ function _sbLocalToCloud(localKey, localRow){
       if(localKey === 'schedules' && (k === 'status' || k === 'sessionId' || k === 'roleStatus')) continue;
       // scripts 表的 roles 数组编码到 name 中
       if(localKey === 'scripts' && k === 'roles') continue;
+      // v207: 云端没有is_deleted/deleted_at列的表，跳过这些字段避免PostgREST报错
+      if(SB_NO_SOFT_DELETE_TABLES.has(localKey) && (k === 'is_deleted' || k === 'deleted_at')) continue;
       cloud[k] = v;
     }
   }
@@ -2615,23 +2620,8 @@ async function syncFromSupabase(showToast, force){
   }
 }
 
-// ---------- 本地→云端：增量同步 ----------
-async function _sbSyncToSupabase(localKey, data){
-  if(!sbClient) return;
-  if(sbSyncInProgress){
-    sbSyncQueue.push({ table: localKey, data });
-    return;
-  }
-  // v186: 上传互斥锁，防止并发上传导致数据丢失
-  if(_uploadLock){
-    sbSyncQueue.push({ table: localKey, data });
-    return;
-  }
-  _uploadLock = true;
-  sbSelfTriggering = true; // 标记自触发，防止实时订阅拉取形成反馈循环
-  showSyncStatus('⏳ 正在上传 ' + localKey + '...', 'syncing');
-
-  try {
+// ---------- v207: 核心上传逻辑（供重试复用） ----------
+async function _sbSyncCore(localKey, data){
     // ===== employees：拆分到 profiles + employees =====
     if(localKey === 'employees'){
       await _sbSyncEmployees(data);
@@ -2700,9 +2690,21 @@ async function _sbSyncToSupabase(localKey, data){
     // v190: 删除云端有但本地已删除的记录（延迟到 upsert 成功后执行，避免上传失败时本地数据被误删）
     const toDeleteIds = existingRows ? existingRows.filter(r => r.local_id !== null && !localIds.has(r.local_id)).map(r => r.id) : [];
 
+    // v207: 对于没有is_deleted列的表，需额外过滤本地软删除记录（无法存到云端）并加入待删除列表
+    var uploadData = data || [];
+    if(SB_NO_SOFT_DELETE_TABLES.has(localKey)){
+      var deletedLocalIds = uploadData.filter(d => d.is_deleted).map(d => d.id);
+      if(deletedLocalIds.length > 0){
+        for(var dId of deletedLocalIds){
+          if(existingMap[dId]) toDeleteIds.push(existingMap[dId]);
+        }
+      }
+      uploadData = uploadData.filter(d => !d.is_deleted);
+    }
+
     // v206: 不再过滤软删除记录，让它们带is_deleted=true上传到云端，确保多端同步删除状态
-    if(data && data.length > 0){
-      for(const row of data){
+    if(uploadData.length > 0){
+      for(const row of uploadData){
         const cloudRow = _sbLocalToCloud(localKey, row);
         // 解析FK引用：将本地数字ID转为云端UUID
         if(empIdMap && cloudRow.employee_id !== undefined && cloudRow.employee_id !== null){
@@ -2710,9 +2712,7 @@ async function _sbSyncToSupabase(localKey, data){
           if(mappedUuid){
             cloudRow.employee_id = mappedUuid;
           } else {
-            // v177: 映射失败时保留原值并记录警告，避免设为null导致数据丢失
             console.warn('[Supabase] employee_id映射失败:', localKey, 'localId=', cloudRow.employee_id, 'empIdMap=', JSON.stringify(empIdMap));
-            // 如果是纯数字ID但找不到映射，编码到note中方便后续恢复
             if(typeof cloudRow.employee_id === 'number' || /^\d+$/.test(String(cloudRow.employee_id))){
               cloudRow.note = (cloudRow.note || '') + ' [empLocalId:' + cloudRow.employee_id + ']';
               delete cloudRow.employee_id;
@@ -2736,7 +2736,6 @@ async function _sbSyncToSupabase(localKey, data){
           if(row.direction) cloudRow.note += ' [direction:'+row.direction+']';
           if(row.cashAmount) cloudRow.note += ' [cashAmount:'+row.cashAmount+']';
           cloudRow.note = cloudRow.note.trim();
-          // 删除云端不存在的字段
           delete cloudRow.direction; delete cloudRow.cashAmount;
         }
         // v173: td_exchanges — 云端缺 type 列，编码到 note
@@ -2747,11 +2746,8 @@ async function _sbSyncToSupabase(localKey, data){
           cloudRow.note = cloudRow.note.trim();
           delete cloudRow.type;
         }
-        // v180: td_adjustments — target/delta 已有实际列，直接使用列值，不再编码到 note
-        if(localKey === 'td_adjustments'){
-          // target 和 delta 作为实际列存在，无需编码到 note
-        }
-        // v189: scripts — roles 数组编码到 name 字段（URL编码避免括号冲突）
+        // v180: td_adjustments — target/delta 已有实际列，直接使用列值
+        // v189: scripts — roles 数组编码到 name 字段
         if(localKey === 'scripts'){
           cloudRow.name = (cloudRow.name || '').replace(/\s*\[ROLES:[^\]]*\]/g, '');
           if(row.roles && row.roles.length > 0) cloudRow.name += ' [ROLES:'+encodeURIComponent(JSON.stringify(row.roles))+']';
@@ -2777,35 +2773,51 @@ async function _sbSyncToSupabase(localKey, data){
     if(toDeleteIds.length > 0){
       await sbClient.from(tableName).delete().in('id', toDeleteIds);
     }
-    // v176: 同步成功后才清除脏标记（之前是提前清除，导致上传失败时数据丢失）
+    // v176: 同步成功后才清除脏标记
     sbDirtyTables.delete(localKey);
     delete sbDirtyTimestamps[localKey];
-    _lastUploadTime[localKey] = Date.now(); // v186: 记录上传成功时间
+    _lastUploadTime[localKey] = Date.now();
     updateCloudBadge(true);
     console.log('[Supabase] 已同步', tableName, data ? data.length : 0, '条');
     showSyncStatus('已同步 '+tableName+' '+data.length+'条', 'synced');
+}
+
+// ---------- 本地→云端：增量同步 ----------
+async function _sbSyncToSupabase(localKey, data){
+  if(!sbClient) return;
+  if(sbSyncInProgress){
+    sbSyncQueue.push({ table: localKey, data });
+    return;
+  }
+  // v186: 上传互斥锁，防止并发上传导致数据丢失
+  if(_uploadLock){
+    sbSyncQueue.push({ table: localKey, data });
+    return;
+  }
+  _uploadLock = true;
+  sbSelfTriggering = true; // 标记自触发，防止实时订阅拉取形成反馈循环
+  showSyncStatus('⏳ 正在上传 ' + localKey + '...', 'syncing');
+
+  try {
+    await _sbSyncCore(localKey, data);
   } catch(e){
     console.error('[Supabase] 同步', localKey, '异常:', e);
-    // v200: 重试逻辑 — 最多3次指数退避
+    // v207: 重试逻辑 — 最多3次指数退避，调用核心函数避免递归
     let _retrySuccess = false;
     for (let _retry = 1; _retry <= 3; _retry++) {
       const _delay = Math.pow(2, _retry - 1) * 1000; // 1s, 2s, 4s
-      console.log('[v200] 重试上传', localKey, '第', _retry, '次，等待', _delay, 'ms');
+      console.log('[v207] 重试上传', localKey, '第', _retry, '次，等待', _delay, 'ms');
       showSyncStatus('⏳ 同步失败，第' + _retry + '次重试中...', 'syncing');
       await new Promise(r => setTimeout(r, _delay));
       try {
-        // 重新执行上传（递归调用但跳过重试 — 通过标记）
         sbSelfTriggering = true;
         _uploadLock = true;
-        const _tableName = SB_TABLE_MAP[localKey];
-        if (!_tableName) break;
-        // 简化重试：直接重新调用核心上传
-        await _sbSyncToSupabase_inner(localKey, data, true);
+        await _sbSyncCore(localKey, data);
         _retrySuccess = true;
         showSyncStatus('✅ 重试成功: ' + localKey, 'synced');
         break;
       } catch(retryErr) {
-        console.warn('[v200] 重试', _retry, '失败:', retryErr);
+        console.warn('[v207] 重试', _retry, '失败:', retryErr);
       }
     }
     if (!_retrySuccess) {
