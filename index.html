@@ -1216,7 +1216,7 @@ const DB={
   saveSessions(v){this._s('sessions',v);},
   getAttendance(){return this._g('attendance');},
   saveAttendance(v){this._s('attendance',v);},
-  getTDExchanges(){return this._g('td_exchanges');},
+  getTDExchanges(){return this._g('td_exchanges').filter(x=>!x.is_deleted);},
   saveTDExchanges(v){this._s('td_exchanges',v);},
   getSchedules(){const raw=this._g('schedules').filter(s=>!s.is_deleted);const seen=new Set();return raw.filter(s=>{const k=s.date+'_'+s.scriptId+'_'+JSON.stringify(s.dms||[]);if(seen.has(k))return false;seen.add(k);return true;});},
   saveSchedules(v){this._s('schedules',v);},
@@ -1224,13 +1224,13 @@ const DB={
   saveRatioOverrides(v){this._s('ratio_overrides',v);},
   getDataOverrides(){return this._g('data_overrides');},
   saveDataOverrides(v){this._s('data_overrides',v);},
-  getTDConsumptions(){return this._g('td_consumption');},
+  getTDConsumptions(){return this._g('td_consumption').filter(c=>!c.is_deleted);},
   saveTDConsumptions(v){this._s('td_consumption',v);},
   getAdminPwd(){return localStorage.getItem('jb2_admin_pwd')||'rjx123123';},
   setAdminPwd(v){localStorage.setItem('jb2_admin_pwd',v);},
-  getTDAdjustments(){return this._g('td_adjustments');},
+  getTDAdjustments(){return this._g('td_adjustments').filter(a=>!a.is_deleted);},
   saveTDAdjustments(v){this._s('td_adjustments',v);},
-  getRecharges(){return this._g('recharges');},
+  getRecharges(){return this._g('recharges').filter(r=>!r.is_deleted);},
   saveRecharges(v){this._s('recharges',v);},
   getSalarySettlements(){return this._g('salary_settlements');},
   saveSalarySettlements(v){this._s('salary_settlements',v);},
@@ -1342,7 +1342,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v204';
+const SW_CACHE_VERSION = 'jb-salary-v205';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -2678,13 +2678,17 @@ async function _sbSyncToSupabase(localKey, data){
       if(r.local_id !== null && r.local_id !== undefined) existingMap[r.local_id] = r.id;
     });
 
+    // v204: 计算localIds时包含所有记录（含软删除），确保云端的已删除记录能被清理
     const localIds = new Set((data || []).map(d => d.id));
     // v190: 删除云端有但本地已删除的记录（延迟到 upsert 成功后执行，避免上传失败时本地数据被误删）
     const toDeleteIds = existingRows ? existingRows.filter(r => r.local_id !== null && !localIds.has(r.local_id)).map(r => r.id) : [];
 
+    // v204: 上传前过滤软删除记录，防止已删除记录从其他设备被重新上传复活
+    const uploadData = (data || []).filter(d => !d.is_deleted);
+
     // upsert 每条记录
-    if(data && data.length > 0){
-      for(const row of data){
+    if(uploadData && uploadData.length > 0){
+      for(const row of uploadData){
         const cloudRow = _sbLocalToCloud(localKey, row);
         // 解析FK引用：将本地数字ID转为云端UUID
         if(empIdMap && cloudRow.employee_id !== undefined && cloudRow.employee_id !== null){
@@ -2826,6 +2830,8 @@ async function _sbSyncToSupabase(localKey, data){
 
 // ---------- employees 专用同步 ----------
 async function _sbSyncEmployees(data){
+  // v204: 上传前过滤软删除记录，防止已删除记录从其他设备被重新上传复活
+  data = (data || []).filter(e => !e.is_deleted);
   // 查出已有 profiles 和 employees
   const { data: existingProfiles } = await sbClient.from('profiles').select('*').eq('role','employee');
   const { data: existingEmpRows } = await sbClient.from('employees').select('*');
@@ -2901,6 +2907,8 @@ async function _sbSyncEmployees(data){
 
 // ---------- sessions 专用同步 ----------
 async function _sbSyncSessions(data){
+  // v204: 上传前过滤软删除记录
+  data = (data || []).filter(s => !s.is_deleted);
   // 确保员工已同步到云端（否则profileIdMap/empIdMap映射会失败），30秒缓存
   const now = Date.now();
   if(now - sbLastEmployeeSync > 30000){
@@ -3014,6 +3022,8 @@ async function _sbSyncSessions(data){
 // ---------- schedules 专用同步 ----------
 let sbLastEmployeeSync = 0;
 async function _sbSyncSchedules(data){
+  // v204: 上传前过滤软删除记录
+  data = (data || []).filter(s => !s.is_deleted);
   // 确保员工已同步到云端（否则DM ID映射会失败），30秒缓存
   const now = Date.now();
   if(now - sbLastEmployeeSync > 30000){
@@ -3114,6 +3124,8 @@ async function _sbSyncSchedules(data){
 
 // ---------- data_overrides 专用同步 ----------
 async function _sbSyncDataOverrides(data){
+  // v204: 上传前过滤软删除记录
+  data = (data || []).filter(d => !d.is_deleted);
   // data_overrides 云端结构: {id, target, month, data(jsonb), local_id}
   // 将本地每条记录整体存为 data jsonb
   const { data: existingRows } = await sbClient.from('data_overrides').select('*');
@@ -3155,6 +3167,8 @@ async function _sbSyncDataOverrides(data){
 
 // ---------- ratio_overrides 专用同步 ----------
 async function _sbSyncRatioOverrides(data){
+  // v204: 上传前过滤软删除记录
+  data = (data || []).filter(d => !d.is_deleted);
   // ratio_overrides 云端结构: {id, script_id, month, ratio, data(jsonb), local_id}
   // 将本地每条记录整体存为 data jsonb
   const empIdMap = await _sbGetEmployeeIdMap();
@@ -7143,11 +7157,12 @@ function saveTDExchange(){
 }
 
 function deleteTDAdjustment(adjId){
-  const adjustments = DB.getTDAdjustments();
-  const idx = adjustments.findIndex(a => a.id === adjId);
-  if(idx < 0){ toast('未找到该调整记录'); return; }
-  adjustments.splice(idx, 1);
-  DB.saveTDAdjustments(adjustments);
+  // v204: 改软删除
+  const all=DB._g('td_adjustments');
+  const rec=all.find(a=>a.id===adjId);
+  if(!rec){toast('未找到该调整记录');return;}
+  rec.is_deleted=true;rec.deleted_at=new Date().toISOString();
+  DB.saveTDAdjustments(all);
   afterSave('已撤销该调整');
 }
 
@@ -8470,14 +8485,18 @@ async function migrateEmployeesToProfiles(){
 
 function deleteConsumption(id){
   if(!canOperate()){toast('请先登录');return;}
-  const consumptions=DB.getTDConsumptions().filter(c=>c.id!==id);
-  DB.saveTDConsumptions(consumptions);
+  // v204: 改软删除，防止多端同步时记录复活
+  const all=DB._g('td_consumption');
+  const rec=all.find(c=>c.id===id);
+  if(rec){rec.is_deleted=true;rec.deleted_at=new Date().toISOString();DB.saveTDConsumptions(all);}
   afterSave('已删除');
 }
 function deleteExchange(id){
   if(!canOperate()){toast('请先登录');return;}
-  const exchanges=DB.getTDExchanges().filter(x=>x.id!==id);
-  DB.saveTDExchanges(exchanges);
+  // v204: 改软删除
+  const all=DB._g('td_exchanges');
+  const rec=all.find(x=>x.id===id);
+  if(rec){rec.is_deleted=true;rec.deleted_at=new Date().toISOString();DB.saveTDExchanges(all);}
   afterSave('已删除');
 }
 // 一键清除指定员工的所有时差消耗和兑换记录（控制台用）
@@ -8743,9 +8762,10 @@ function saveRecharge(){
 
 function deleteRecharge(id){
   if(!requireAdmin()){return;}
-  let recharges=DB.getRecharges();
-  recharges=recharges.filter(r=>r.id!==id);
-  DB.saveRecharges(recharges);
+  // v204: 改软删除
+  const all=DB._g('recharges');
+  const rec=all.find(r=>r.id===id);
+  if(rec){rec.is_deleted=true;rec.deleted_at=new Date().toISOString();DB.saveRecharges(all);}
   afterSave('已删除');
 }
 
