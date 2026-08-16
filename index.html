@@ -1350,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v213';
+const SW_CACHE_VERSION = 'jb-salary-v214';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -4120,11 +4120,8 @@ function confirmSettleMonth(){
     if(confirm(confirmMsg)){
       const result=unlockMonth(month);
       if(result.success){
-        toast('✓ '+result.message);
         renderSalaryOverview();
-        if(sbClient && sbConnected){
-          setTimeout(()=>{syncFromSupabase(false);},500);
-        }
+        afterSave('✓ '+result.message);
       }else{
         toast('✗ '+result.message);
       }
@@ -4149,11 +4146,8 @@ function confirmSettleMonth(){
     if(confirm(confirmMsg)){
       const result=settleMonth(month);
       if(result.success){
-        toast('✓ '+result.message);
         renderSalaryOverview();
-        if(sbClient && sbConnected){
-          setTimeout(()=>{syncFromSupabase(false);},500);
-        }
+        afterSave('✓ '+result.message);
       }else{
         toast('✗ '+result.message);
       }
@@ -5650,7 +5644,7 @@ function setAttStatus(empId, date, status) {
   }
   DB.saveAttendance(att);
   renderAttendance();
-  toast(status === 'full' ? '已标记满勤' : status === 'absent' ? '已标记缺勤' : '已取消标记');
+  afterSave(status === 'full' ? '已标记满勤' : status === 'absent' ? '已标记缺勤' : '已取消标记');
 }
 
 function showAttDateDetail(dmId,date){
@@ -6116,7 +6110,7 @@ function markScheduleCompleted(id){
   DB.saveSchedules(schedules);
   renderSchCalendar();
   renderScheduleList();
-  toast('已标记为已完成');
+  afterSave('已标记为已完成');
 }
 
 // Auto-link schedules when sessions are saved - override schedule with session data
