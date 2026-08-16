@@ -1350,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v211';
+const SW_CACHE_VERSION = 'jb-salary-v212';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -2354,9 +2354,14 @@ async function syncFromSupabase(showToast, force){
       if(sbDirtyTables.has(localKey)){
         console.log('[v200] 脏表', localKey, '也执行下载合并');
       }
-      // v191: 跳过刚上传过的表（3秒内），防止云端延迟导致覆盖本地
-      if(_lastUploadTime[localKey] && Date.now() - _lastUploadTime[localKey] < 3000){
-        console.log('[v191] 跳过刚上传的表:', localKey, '(3秒内刚上传)');
+      // v212: 本地保存后60秒内，跳过拉取，防止云端旧数据覆盖本地新数据
+      // 覆盖了v191的3秒上传保护 + 新增本地保存时间保护
+      if(_lastUploadTime[localKey] && Date.now() - _lastUploadTime[localKey] < 60000){
+        console.log('[v212] 跳过刚上传的表:', localKey, '(60秒内刚上传)');
+        continue;
+      }
+      if(sbDirtyTimestamps[localKey] && Date.now() - sbDirtyTimestamps[localKey] < 60000){
+        console.log('[v212] 跳过刚保存的表:', localKey, '(60秒内刚保存，保护本地数据)');
         continue;
       }
       try {
