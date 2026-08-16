@@ -1350,7 +1350,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v223';
+const SW_CACHE_VERSION = 'jb-salary-v224';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -7381,7 +7381,7 @@ function switchEmpTab(idx,el){
 
 function renderEmpPage(){
   if(!currentEmp)return;
-  const month=monthStr();
+  const month=empViewMonth||monthStr();
   const r=calcMonthlySalary(currentEmp.id,month);
   if(r){
     document.getElementById('empTotalSalary').innerHTML='&yen;'+r.total;
@@ -7441,7 +7441,7 @@ function renderEmpTDHistory(){
 
 function showEmpSalaryDetail(){
   if(!currentEmp)return;
-  showSalaryDetail(currentEmp.id,monthStr());
+  showSalaryDetail(currentEmp.id,empViewMonth||monthStr());
 }
 
 
