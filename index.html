@@ -1655,7 +1655,15 @@ function initSupabase(){
       }
       
       return true;
+    } else {
+      console.warn('[Supabase] SDK 未加载');
+      return false;
     }
+  } catch(e){
+    console.error('[Supabase] 初始化失败:', e);
+    return false;
+  }
+}
 
 // v201: 多标签页登录状态同步
 class AuthSyncManager {
@@ -1784,16 +1792,6 @@ class RealtimeSyncManager {
 
 let realtimeSyncManager = null;
 
- else {
-      console.warn('[Supabase] SDK 未加载');
-      return false;
-    }
-  } catch(e){
-    console.error('[Supabase] 初始化失败:', e);
-    return false;
-  }
-}
-
 function showSyncStatus(msg, type){
   const el = document.getElementById('syncStatus');
   if(!el) return;
@@ -1854,7 +1852,12 @@ function updateCloudBadge(connected){
     badge.className = 'cloud-badge connected';
     badge.innerHTML = '☁ 云端';
     badge.title = '已连接云端数据库';
+  } else {
+    badge.className = 'cloud-badge disconnected';
+    badge.innerHTML = '☁ 本地';
+    badge.title = '未连接云端（仅本地存储）';
   }
+}
 
 // v201: 软删除API封装
 async function softDeleteRecord(tableName, recordId) {
@@ -1939,12 +1942,6 @@ async function cardConsume(cardId, amount, sessionId, operatorId, note = null) {
     
     console.log('[v201] 消费成功:', cardId, amount);
     return data;
-}
- else {
-    badge.className = 'cloud-badge disconnected';
-    badge.innerHTML = '☁ 本地';
-    badge.title = '未连接云端（仅本地存储）';
-  }
 }
 
 // ---------- 云端→本地：全量同步 ----------
