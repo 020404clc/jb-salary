@@ -1321,10 +1321,10 @@ function afterSave(msg) {
         try{ await _sbSyncToSupabase(key, DB._g(key)); }catch(e){}
       }
       // 上传完成后再拉取（等 Realtime 传播）
-      setTimeout(()=>{ syncFromSupabase(false); }, 2000);
+      setTimeout(()=>{ syncFromSupabase(false, true); }, 2000);
     })();
   } else if(sbClient){
-    setTimeout(()=>{ syncFromSupabase(false); }, 3000);
+    setTimeout(()=>{ syncFromSupabase(false, true); }, 3000);
   }
   if (msg) toast(msg);
 }
@@ -2245,7 +2245,7 @@ async function syncFromSupabase(showToast, force){
           });
           const mergedSess2 = _sessDeduped.concat(sessLocalOnly2);
           localStorage.setItem('jb2_sessions', JSON.stringify(mergedSess2));
-        } else if(_lastUploadTime['sessions'] && Date.now() - _lastUploadTime['sessions'] < 300000){
+        } else if(!force && _lastUploadTime['sessions'] && Date.now() - _lastUploadTime['sessions'] < 15000){
           console.log('[v213] 跳过 sessions 下载（300秒内刚上传过，防止覆盖）');
           // 刚上传过，本地数据比云端更新，不覆盖
         } else {
@@ -2352,7 +2352,7 @@ async function syncFromSupabase(showToast, force){
           });
           const mergedSch2 = _schDeduped.concat(schLocalOnly2);
           localStorage.setItem('jb2_schedules', JSON.stringify(mergedSch2.map(s => ({...s, notes: (s.notes || '').replace(/\s*\[status:[^\]]*\]/g, '').replace(/\s*\[sessionId:[^\]]*\]/g, '').replace(/\s*\[roleStatus:[^\]]*\]/g, '').trim()}))));
-        } else if(_lastUploadTime['schedules'] && Date.now() - _lastUploadTime['schedules'] < 300000){
+        } else if(!force && _lastUploadTime['schedules'] && Date.now() - _lastUploadTime['schedules'] < 15000){
           console.log('[v213] 跳过 schedules 下载（300秒内刚上传过，防止覆盖）');
           // 刚上传过，本地数据比云端更新，不覆盖
         } else {
@@ -2380,12 +2380,12 @@ async function syncFromSupabase(showToast, force){
         console.log('[v200] 脏表', localKey, '也执行下载合并');
       }
       // v213: 本地保存后300秒(5分钟)内，跳过拉取，防止云端旧数据覆盖本地新数据
-      if(_lastUploadTime[localKey] && Date.now() - _lastUploadTime[localKey] < 300000){
-        console.log('[v213] 跳过刚上传的表:', localKey, '(300秒内刚上传)');
+      if(!force && _lastUploadTime[localKey] && Date.now() - _lastUploadTime[localKey] < 15000){
+        console.log('[v220] 跳过刚上传的表:', localKey, '(15秒内刚上传)');
         continue;
       }
-      if(sbDirtyTimestamps[localKey] && Date.now() - sbDirtyTimestamps[localKey] < 300000){
-        console.log('[v213] 跳过刚保存的表:', localKey, '(300秒内刚保存，保护本地数据)');
+      if(!force && sbDirtyTimestamps[localKey] && Date.now() - sbDirtyTimestamps[localKey] < 15000){
+        console.log('[v220] 跳过刚保存的表:', localKey, '(15秒内刚保存，保护本地数据)');
         continue;
       }
       try {
@@ -3385,7 +3385,7 @@ function subscribeToSupabaseChanges(){
           if(!sbSelfTriggering){
             if(Date.now() - _lastSyncTime < 2000) return;
             _lastSyncTime = Date.now();
-            syncFromSupabase(false);
+            syncFromSupabase(false, true);
           }
         }, 400);
       }
@@ -4472,7 +4472,7 @@ function _throttledAutoSync(){
   if(now - _lastSyncTime < 2000) return; // v195: 同步节流
   _lastAutoSyncTime = now;
   _lastSyncTime = now;
-  syncFromSupabase(false);
+  syncFromSupabase(false, true);
 }
 
 function switchAdminTab(idx,el){
@@ -8483,7 +8483,7 @@ async function postLoginInit(){
     // v169: 登录后强制全量拉取（不走脏表逻辑，确保数据一定被拉到）
     await _forcePullAllTables();
     // 再从云端同步业务数据（合并策略）
-    await syncFromSupabase(false);
+    await syncFromSupabase(false, true);
     // v169: 同步后二次验证——如果关键表仍为空，再强制拉一次
     if(!DB.getScripts().length){
       console.warn('[v169] scripts仍为空，二次强制拉取');
@@ -8507,7 +8507,7 @@ async function postLoginInit(){
         var rtHealthy = (Date.now() - _lastRealtimeEvent) < 60000;
         if(!rtHealthy){
           // Realtime不健康，用30秒频率兜底
-          syncFromSupabase(false);
+          syncFromSupabase(false, true);
           _lastSyncTime = Date.now();
         } else {
           // Realtime正常，降低轮询频率到120秒
@@ -8515,7 +8515,7 @@ async function postLoginInit(){
           _pollingInterval = setInterval(()=>{
             if(!document.hidden && sbClient && (adminLoggedIn || currentEmp)){
               if(Date.now() - _lastSyncTime < 2000) return;
-              syncFromSupabase(false);
+              syncFromSupabase(false, true);
               _lastSyncTime = Date.now();
             }
           }, 120000);
@@ -8555,7 +8555,7 @@ async function postLoginInit(){
       if(!document.hidden && sbClient && (adminLoggedIn || currentEmp)){
         if(Date.now() - _lastSyncTime >= 2000){
           _lastSyncTime = Date.now();
-          syncFromSupabase(false);
+          syncFromSupabase(false, true);
         }
       }
     };
