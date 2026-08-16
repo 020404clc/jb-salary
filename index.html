@@ -3761,21 +3761,21 @@ function calcMidnightFee(session,empId){
     const feeMin=actualEndMin-feeStart;
     feeHours=Math.round(feeMin/30)/2; // 半小时精度
   }
-  // 兼职/半全职：只能修仙，拿80%修仙费
+  // 兼职/半全职：只能修仙，拿80%修仙费（基数×小时数×80%）
   if(isPartTimeEmp(emp)||isSemiFullTimeEmp(emp)){
-    const fee=roundTo(base*0.8,1);
+    const fee=roundTo(base*feeHours*0.8,1);
     console.log('[calcMidnightFee] 兼职/半全职修仙, base='+base+', hours='+feeHours+', fee='+fee+' (80%)');
     return{fee:fee,hours:feeHours,choice:'midnight'};
   }
   
   if(dm.midnightChoice==='time_diff'){
-    // 全职选时差：修仙提成=基数×40%，同时累积时差小时数(固定+可调配)
-    const fee=roundTo(base*0.4,1);
+    // 全职选时差：修仙提成=基数×小时数×40%，同时累积时差小时数(固定+可调配)
+    const fee=roundTo(base*feeHours*0.4,1);
     console.log('[calcMidnightFee] 时差模式, base='+base+', hours='+feeHours+', fee='+fee);
     return{fee:fee,hours:feeHours,choice:'time_diff'};
   }else{
-    // 全职选修仙：修仙提成=基数×75%，不累积时差
-    const fee=roundTo(base*0.75,1);
+    // 全职选修仙：修仙提成=基数×小时数×75%，不累积时差
+    const fee=roundTo(base*feeHours*0.75,1);
     console.log('[calcMidnightFee] 修仙模式, base='+base+', hours='+feeHours+', fee='+fee);
     return{fee:fee,hours:feeHours,choice:'midnight'};
   }
