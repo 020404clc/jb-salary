@@ -1342,7 +1342,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v203';
+const SW_CACHE_VERSION = 'jb-salary-v204';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -4186,23 +4186,49 @@ async function unifiedLogin(){
     if(!pwd){ showErr('请输入密码'); return; }
 
     if(accountVal === 'rjx8888'){
-      // === 管理员登录 ===
-      var adminPwd = '';
-      try{ adminPwd = localStorage.getItem('jb2_admin_pwd') || 'rjx123123'; }catch(e){ adminPwd = 'rjx123123'; }
-      console.log('[Login] 本地adminPwd:', adminPwd);
+      // === 管理员登录 v204: 云端密码优先校验，本地缓存仅离线兜底 ===
+      var verified = false;
 
-      if(pwd === adminPwd){
-        // 本地密码直接匹配，立即登录
+      // 第1步：优先查云端密码（实时校验，确保多端一致）
+      if(sbClient){
+        try{
+          var timeout = new Promise(function(_,rej){setTimeout(function(){rej(new Error('timeout'));},5000);});
+          var query = sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle();
+          var result = await Promise.race([query, timeout]);
+          if(result && result.data && result.data.value){
+            if(pwd === result.data.value){
+              localStorage.setItem('jb2_admin_pwd', result.data.value);
+              verified = true;
+              console.log('[v204] 云端密码校验通过');
+            } else {
+              showErr('密码错误');
+              pwdEl.value = '';
+              pwdEl.focus();
+              return;
+            }
+          }
+        }catch(e){ console.warn('[v204] 云端密码查询失败:', e); }
+      }
+
+      // 第2步：云端不可达时，本地缓存兜底
+      if(!verified){
+        var localPwd = '';
+        try{ localPwd = localStorage.getItem('jb2_admin_pwd') || 'rjx123123'; }catch(e){ localPwd = 'rjx123123'; }
+        if(pwd === localPwd){
+          verified = true;
+          console.log('[v204] 云端不可达，本地密码兜底通过');
+        }
+      }
+
+      if(verified){
         adminLoggedIn = true;
         currentEmp = null;
         currentUser = {id:'admin', name:'rjx8888', role:'admin'};
-        // v191: 先上传脏数据到云端，如果失败则不清除本地数据
         var flushOk = await _flushDirtyTablesToCloud();
         if(!flushOk){
-          console.warn('[v191] 脏表同步失败，保留本地数据不清除');
+          console.warn('[v204] 脏表同步失败，保留本地数据');
           toast('⚠ 云端同步未完成，本地数据已保留');
         }
-        // v191: 只有同步成功才清除本地数据
         if(flushOk) _clearLocalBusinessData('jb2_admin_pwd');
         var overlay = document.getElementById('unifiedLoginOverlay');
         if(overlay) overlay.style.display = 'none';
@@ -4211,67 +4237,14 @@ async function unifiedLogin(){
         if(ap) ap.classList.add('active');
         updateRoleIndicator();
         toast('管理员登录中，正在同步云端数据...');
-        // v198: 登录时双向同步密码——先拉云端，再推本地到云端（确保云端有最新密码）
-        try{
-          if(sbClient){
-            sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle().then(async function(r){
-              if(r && r.data && r.data.value && r.data.value !== adminPwd){
-                // 云端有更新的密码，本地更新
-                localStorage.setItem('jb2_admin_pwd', r.data.value);
-                console.log('[v198] 云端密码更新，本地已同步');
-              } else if(!r || !r.data || !r.data.value){
-                // 云端没有密码记录，把本地密码推上去
-                console.log('[v198] 云端无密码记录，推送本地密码到云端');
-                await _sbSyncAdminPwd(adminPwd);
-              }
-            }).catch(function(e){ console.warn('[v198] 登录密码同步失败:', e); });
-          }
-        }catch(e){}
-        // v168: 先完成同步，再渲染管理面板
         postLoginInit().then(function(){
           renderAdmin();
           toast('管理端数据同步完成 ✓');
         });
       } else {
-        // 本地不匹配，尝试云端（5秒超时）
-        var cloudPwd = null;
-        if(sbClient){
-          try{
-            var timeout = new Promise(function(_,rej){setTimeout(function(){rej(new Error('timeout'));},5000);});
-            var query = sbClient.from('settings').select('value').eq('key','admin_password').maybeSingle();
-            var result = await Promise.race([query, timeout]);
-            if(result && result.data && result.data.value) cloudPwd = result.data.value;
-          }catch(e){ console.warn('[Login] 云端查询失败:',e); }
-        }
-        if(cloudPwd && pwd === cloudPwd){
-          localStorage.setItem('jb2_admin_pwd', cloudPwd);
-          adminLoggedIn = true;
-          currentEmp = null;
-          currentUser = {id:'admin', name:'rjx8888', role:'admin'};
-          // v191: 先上传脏数据到云端，如果失败则不清除本地数据
-          var flushOk2 = await _flushDirtyTablesToCloud();
-          if(!flushOk2){
-            console.warn('[v191] 云端登录脏表同步失败，保留本地数据');
-            toast('⚠ 云端同步未完成，本地数据已保留');
-          }
-          // v191: 只有同步成功才清除本地数据
-          if(flushOk2) _clearLocalBusinessData('jb2_admin_pwd');
-          var overlay2 = document.getElementById('unifiedLoginOverlay');
-          if(overlay2) overlay2.style.display = 'none';
-          document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active')});
-          var ap2 = document.getElementById('adminPage');
-          if(ap2) ap2.classList.add('active');
-          updateRoleIndicator();
-          toast('管理员登录中，正在同步云端数据...');
-          postLoginInit().then(function(){
-            renderAdmin();
-            toast('管理端数据同步完成 ✓');
-          });
-        } else {
-          showErr('密码错误');
-          pwdEl.value = '';
-          pwdEl.focus();
-        }
+        showErr('密码错误');
+        pwdEl.value = '';
+        pwdEl.focus();
       }
     }else{
       // === 员工登录 ===
