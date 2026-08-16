@@ -1342,7 +1342,7 @@ async function _retryDirtySync(){
 // ========================================
 
 // v201: SW缓存版本号
-const SW_CACHE_VERSION = 'jb-salary-v209';
+const SW_CACHE_VERSION = 'jb-salary-v210';
 
 const SUPABASE_URL = 'https://evrmkluidgoqrkmfewji.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9ITL3y5M524aQ-C96Qambw_8-RL5NPG';
@@ -3735,6 +3735,7 @@ function calcTimeDiffEarned(session,empId){
 function getTimeDiffBalance(empId){
   let fixed=0,flexible=0;
   DB.getSessions().forEach(s=>{
+    if(!s.dms)return;
     const dm=s.dms.find(d=>empIdMatch(d.employeeId,empId));
     if(dm){const earned=calcTimeDiffEarned(s,empId);fixed+=earned.fixed;flexible+=earned.flexible;}
   });
@@ -5302,8 +5303,8 @@ function renderTimeDiff(){
       </div>
     </div>`;
   });
-  const exchanges=DB.getTDExchanges().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
-  const consumptions=DB.getTDConsumptions().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
+  const exchanges=DB.getTDExchanges().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,20);
+  const consumptions=DB.getTDConsumptions().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,20);
   const adjustments=DB.getTDAdjustments().sort((a,b)=>b.id-a.id).slice(0,20);
   if(adjustments.length){
     html+=`<div class="card"><div class="card-title">调整记录</div>`;
@@ -5319,14 +5320,14 @@ function renderTimeDiff(){
     if(exchanges.length){
     exchanges.forEach(x=>{
       const typeLabel={cash:'兑换工资',full_leave:'调休全天',half_leave:'调休半天'}[x.type]||x.type;
-      html+=`<div class="list-item" style="display:flex;align-items:center;justify-content:space-between"><div class="item-info" style="flex:1"><div class="item-name">${empName(x.employeeId)} - ${typeLabel}</div><div class="item-desc">${fmtDate(x.date)} · ${x.hours}h${x.type==='cash'?' · &yen;'+tdCashValue(x.hours):''}</div></div><button class="btn btn-danger btn-sm" onclick="deleteExchange(${x.id})" style="flex-shrink:0;margin-left:8px;font-size:11px">删除</button></div>`;
+      html+=`<div class="list-item" style="display:flex;align-items:center;justify-content:space-between"><div class="item-info" style="flex:1"><div class="item-name">${empName(x.employeeId)} - ${typeLabel}</div><div class="item-desc">${fmtDate(x.date||todayStr())} · ${x.hours}h${x.type==='cash'?' · &yen;'+tdCashValue(x.hours):''}</div></div><button class="btn btn-danger btn-sm" onclick="deleteExchange(${x.id})" style="flex-shrink:0;margin-left:8px;font-size:11px">删除</button></div>`;
     });
     }
     if(consumptions.length){
     consumptions.forEach(c=>{
       const typeLabel={fixed_rest:'固定时差休息',flex_rest:'灵活时差休息',flex_cash:'灵活时差换钱',same_day_off:'当日调休',personal_leave:'请假'}[c.type]||c.type;
       const sdoR=c.type==='same_day_off'?getSameDayOffRemaining(c.employeeId):null;
-      html+=`<div class="list-item" style="display:flex;align-items:center;justify-content:space-between"><div class="item-info" style="flex:1"><div class="item-name">${empName(c.employeeId)} - ${typeLabel}</div><div class="item-desc">${fmtDate(c.date)}${c.type==='same_day_off'?' · 剩余'+sdoR.remaining+'天':c.type==='flex_cash'?' · '+c.hours+'h · &yen;'+c.cashAmount:' · '+c.hours+'h'}</div></div><button class="btn btn-danger btn-sm" onclick="deleteConsumption(${c.id})" style="flex-shrink:0;margin-left:8px;font-size:11px">删除</button></div>`;
+      html+=`<div class="list-item" style="display:flex;align-items:center;justify-content:space-between"><div class="item-info" style="flex:1"><div class="item-name">${empName(c.employeeId)} - ${typeLabel}</div><div class="item-desc">${fmtDate(c.date||todayStr())}${c.type==='same_day_off'?' · 剩余'+sdoR.remaining+'天':c.type==='flex_cash'?' · '+c.hours+'h · &yen;'+c.cashAmount:' · '+c.hours+'h'}</div></div><button class="btn btn-danger btn-sm" onclick="deleteConsumption(${c.id})" style="flex-shrink:0;margin-left:8px;font-size:11px">删除</button></div>`;
     });
     }
     html+=`</div>`;
