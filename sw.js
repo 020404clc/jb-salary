@@ -1,4 +1,4 @@
-// Service Worker - 离线缓存 v206
+// Service Worker - 离线缓存 v208
 const CACHE_NAME='jb-salary-v208';
 const urlsToCache = ['./', './index.html'];
 

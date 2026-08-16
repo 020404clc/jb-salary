@@ -3699,6 +3699,7 @@ function calcMidnightFee(session,empId){
 }
 
 function calcTimeDiffEarned(session,empId){
+  if(!session.dms)return{fixed:0,flexible:0};
   const dm=session.dms.find(d=>empIdMatch(d.employeeId,empId));
   if(!dm){console.log('[calcTimeDiffEarned] 未找到DM记录, empId='+empId);return{fixed:0,flexible:0};}
   const emp=empById(empId);
@@ -5274,8 +5275,10 @@ function showSalaryDetail(empId,month){
 
 // ---- Time Diff ----
 function renderTimeDiff(){
+  try{
   const emps=DB.getEmployees();
   const el=document.getElementById('timeDiffList');
+  if(!el)return;
   let html=`<div style="text-align:right;margin-bottom:8px"><button class="btn btn-sm btn-primary" onclick="openTDExchangeModal()">+ 时差操作</button></div>`;
   emps.forEach(e=>{
     const bal=getTimeDiffBalance(e.id);
@@ -5330,6 +5333,7 @@ function renderTimeDiff(){
   }
 
   el.innerHTML=html;
+  }catch(err){console.error('[renderTimeDiff] 渲染异常:',err);const el=document.getElementById('timeDiffList');if(el)el.innerHTML='<div style="padding:20px;color:red">时差管理加载异常：'+err.message+'</div>';}
 }
 
 // ---- Attendance ----
